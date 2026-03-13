@@ -1,13 +1,12 @@
-import * as THREE from 'three';
+import * as THREE from "three";
 
-function boostNodeColor(input) {
+function visibleNodeColor(input) {
   const color = (input instanceof THREE.Color ? input : new THREE.Color(input || '#69a6ff')).clone();
   const hsl = { h: 0, s: 0, l: 0 };
   color.getHSL(hsl);
-  if (hsl.s < 0.2) hsl.s = 0.72;
-  if (hsl.l < 0.3) hsl.l = 0.64;
-  else if (hsl.l < 0.42) hsl.l = 0.7;
-  return new THREE.Color().setHSL(hsl.h, Math.min(1, hsl.s), Math.min(0.9, hsl.l));
+  if (hsl.s < 0.18) hsl.s = 0.58;
+  if (hsl.l < 0.34) hsl.l = 0.56;
+  return new THREE.Color().setHSL(hsl.h, Math.min(1, hsl.s), Math.min(0.86, hsl.l));
 }
 
 function makeMaterial() {
@@ -15,8 +14,8 @@ function makeMaterial() {
     transparent: true,
     depthTest: false,
     depthWrite: false,
+    toneMapped: false,
     uniforms: {
-      uViewportHeight: { value: 800 },
       uPixelRatio: { value: Math.min(2, window.devicePixelRatio || 1) },
       uOpacity: { value: 1.0 }
     },
@@ -24,41 +23,49 @@ function makeMaterial() {
       precision highp float;
       attribute float aSize;
       attribute vec3 aColor;
+      attribute float aState;
+      attribute float aOpacity;
       varying vec3 vColor;
-      varying float vSelected;
-      uniform float uViewportHeight;
+      varying float vState;
+      varying float vOpacity;
       uniform float uPixelRatio;
       void main() {
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        float depth = max(1.0, -mvPosition.z);
-        float px = max(4.0, aSize * uViewportHeight * projectionMatrix[1][1] * 0.42 / depth);
-        gl_PointSize = px * uPixelRatio;
+        float basePx = clamp(aSize * 2.8, 2.0, 24.0);
+        gl_PointSize = basePx * uPixelRatio;
         gl_Position = projectionMatrix * mvPosition;
         vColor = aColor;
-        vSelected = step(1.35, aSize);
+        vState = aState;
+        vOpacity = aOpacity;
       }
     `,
     fragmentShader: /* glsl */`
       precision highp float;
       varying vec3 vColor;
-      varying float vSelected;
+      varying float vState;
+      varying float vOpacity;
       uniform float uOpacity;
       void main() {
         vec2 uv = gl_PointCoord * 2.0 - 1.0;
         float r = length(uv);
         if (r > 1.0) discard;
-        float body = smoothstep(1.0, 0.0, r);
+
+        float body = 1.0 - smoothstep(0.86, 1.0, r);
         float edge = smoothstep(0.72, 0.98, r);
-        float halo = smoothstep(1.0, 0.78, r);
-        float spec = smoothstep(0.34, 0.0, distance(uv, vec2(-0.34, 0.36)));
-        vec3 base = vColor;
-        vec3 lit = mix(base, vec3(1.0), spec * 0.28);
-        vec3 ringColor = mix(lit, vec3(0.02, 0.04, 0.08), edge * 0.45);
-        vec3 color = mix(ringColor, lit, body);
-        if (vSelected > 0.5) {
-          color = mix(color, vec3(1.0), halo * 0.18);
+        float inner = 1.0 - smoothstep(0.0, 0.58, r);
+
+        vec3 color = vColor;
+        color = mix(color, vec3(1.0), inner * 0.08);
+        color = mix(color, color * 0.62, edge * 0.32);
+
+        if (vState > 1.5) {
+          color = mix(color, vec3(1.0, 0.98, 0.86), edge * 0.42);
+        } else if (vState > 0.5) {
+          color = mix(color, vec3(1.0), edge * 0.14);
         }
-        float alpha = body * uOpacity;
+
+        float alpha = body * vOpacity * uOpacity;
+        if (alpha < 0.01) discard;
         gl_FragColor = vec4(clamp(color, 0.0, 1.0), alpha);
       }
     `
@@ -82,10 +89,13 @@ export class NodeRenderer {
   }
 
   buildMesh(count) {
+    const safeCount = Math.max(1, count);
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(Math.max(1, count) * 3), 3));
-    geometry.setAttribute('aColor', new THREE.Float32BufferAttribute(new Float32Array(Math.max(1, count) * 3), 3));
-    geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(new Float32Array(Math.max(1, count)), 1));
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(safeCount * 3), 3));
+    geometry.setAttribute('aColor', new THREE.Float32BufferAttribute(new Float32Array(safeCount * 3), 3));
+    geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(new Float32Array(safeCount), 1));
+    geometry.setAttribute('aState', new THREE.Float32BufferAttribute(new Float32Array(safeCount), 1));
+    geometry.setAttribute('aOpacity', new THREE.Float32BufferAttribute(new Float32Array(safeCount), 1));
     const material = makeMaterial();
     const points = new THREE.Points(geometry, material);
     points.frustumCulled = false;
@@ -95,7 +105,7 @@ export class NodeRenderer {
     return points;
   }
 
-  update({ positions, sizes, colors, visibleMask = null, emphasisSet = null, selectedIndex = -1, viewportHeight = 800 }) {
+  update({ positions, sizes, colors, visibleMask = null, emphasisSet = null, selectedIndex = -1 }) {
     const count = positions.length;
     if (!this.mesh || this.capacity !== count) {
       this.dispose();
@@ -107,28 +117,31 @@ export class NodeRenderer {
     const posAttr = this.mesh.geometry.getAttribute('position');
     const colorAttr = this.mesh.geometry.getAttribute('aColor');
     const sizeAttr = this.mesh.geometry.getAttribute('aSize');
-    this.mesh.material.uniforms.uViewportHeight.value = viewportHeight;
+    const stateAttr = this.mesh.geometry.getAttribute('aState');
+    const opacityAttr = this.mesh.geometry.getAttribute('aOpacity');
     this.mesh.material.uniforms.uPixelRatio.value = Math.min(2, window.devicePixelRatio || 1);
 
-    const minVisibleSize = 0.001;
     for (let i = 0; i < count; i += 1) {
       const p = positions[i] || { x: 0, y: 0, z: 0 };
       const visible = !visibleMask || visibleMask[i];
       const emphasized = emphasisSet ? emphasisSet.has(i) : false;
-      let size = sizes[i] ?? 1;
-      if (i === selectedIndex) size *= 1.45;
-      else if (emphasized) size *= 1.12;
-      if (!visible) size = minVisibleSize;
+      let size = Math.max(0.2, Number(sizes[i] ?? 1));
+      if (i === selectedIndex) size *= 1.2;
+      else if (emphasized) size *= 1.08;
 
-      const color = boostNodeColor(colors[i] || '#69a6ff');
-      posAttr.setXYZ(i, p.x || 0, p.y || 0, p.z || 0);
+      const color = visibleNodeColor(colors[i] || '#69a6ff');
+      posAttr.setXYZ(i, Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0);
       colorAttr.setXYZ(i, color.r, color.g, color.b);
-      sizeAttr.setX(i, Math.max(minVisibleSize, size));
+      sizeAttr.setX(i, visible ? size : 0.2);
+      stateAttr.setX(i, i === selectedIndex ? 2 : emphasized ? 1 : 0);
+      opacityAttr.setX(i, visible ? 1 : 0);
     }
 
     posAttr.needsUpdate = true;
     colorAttr.needsUpdate = true;
     sizeAttr.needsUpdate = true;
+    stateAttr.needsUpdate = true;
+    opacityAttr.needsUpdate = true;
     this.mesh.geometry.computeBoundingSphere();
     this.mesh.geometry.computeBoundingBox();
     this.mesh.updateMatrixWorld(true);
