@@ -49,6 +49,29 @@ function parseRgbToHex(colorEl) {
   return `#${[r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')}`;
 }
 
+async function readFileTextProgressive(file, onProgress) {
+  if (!file?.stream) {
+    const text = await file.text();
+    onProgress?.(95);
+    return text;
+  }
+  const total = file.size || 0;
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  const chunks = [];
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(decoder.decode(value, { stream: true }));
+    received += value?.length || 0;
+    if (total) onProgress?.(Math.min(90, (received / total) * 90));
+  }
+  chunks.push(decoder.decode());
+  onProgress?.(95);
+  return chunks.join('');
+}
+
 export function parseGexfText(text) {
   const xml = new DOMParser().parseFromString(text, 'application/xml');
   const parserError = xml.getElementsByTagName('parsererror')[0];
@@ -66,10 +89,7 @@ export function parseGexfText(text) {
     directChildrenByLocalName(block, 'attribute').forEach((attr) => {
       const id = attr.getAttribute('id');
       if (!id) return;
-      target.set(id, {
-        title: attr.getAttribute('title') || id,
-        type: attr.getAttribute('type') || 'string'
-      });
+      target.set(id, { title: attr.getAttribute('title') || id, type: attr.getAttribute('type') || 'string' });
     });
   });
 
@@ -131,7 +151,11 @@ export function parseGexfText(text) {
   return { nodes, edges };
 }
 
-export async function parseGexfFile(file) {
-  const text = await file.text();
-  return parseGexfText(text);
+export async function parseGexfFile(file, { onProgress = null, onPhase = null } = {}) {
+  onPhase?.('Reading GEXF…');
+  const text = await readFileTextProgressive(file, onProgress);
+  onPhase?.('Parsing GEXF…');
+  const parsed = parseGexfText(text);
+  onProgress?.(100);
+  return parsed;
 }

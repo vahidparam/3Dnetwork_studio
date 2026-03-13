@@ -34,18 +34,18 @@ function sanitizeEdge(raw, fallbackIndex) {
   };
 }
 
-export async function loadGraphFromFiles({ gexfFile, nodesCsvFile, edgesCsvFile }) {
+export async function loadGraphFromFiles({ gexfFile, nodesCsvFile, edgesCsvFile, onProgress = null, onPhase = null }) {
   if (gexfFile) {
-    return parseGexfFile(gexfFile);
+    return parseGexfFile(gexfFile, { onProgress, onPhase });
   }
   if (!nodesCsvFile || !edgesCsvFile) {
     throw new Error('Provide one GEXF file, or both nodes and edges CSV files.');
   }
+  onPhase?.('Reading CSV files…');
+  onProgress?.(10);
   const [rawNodes, rawEdges] = await Promise.all([parseCsvFile(nodesCsvFile), parseCsvFile(edgesCsvFile)]);
-  return {
-    nodes: rawNodes,
-    edges: rawEdges
-  };
+  onProgress?.(100);
+  return { nodes: rawNodes, edges: rawEdges };
 }
 
 function isNumericLike(value) {
@@ -69,11 +69,7 @@ export function buildGraph(rawGraph) {
     if (!nodeIndexById.has(edge.source) || !nodeIndexById.has(edge.target)) continue;
     const sourceIndex = nodeIndexById.get(edge.source);
     const targetIndex = nodeIndexById.get(edge.target);
-    edges.push({
-      ...edge,
-      sourceIndex,
-      targetIndex
-    });
+    edges.push({ ...edge, sourceIndex, targetIndex });
   }
 
   const degree = new Array(nodes.length).fill(0);

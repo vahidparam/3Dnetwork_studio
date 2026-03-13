@@ -1,39 +1,68 @@
-# Network3D Studio – revision 2
+# Network3D Studio
 
-This revision fixes and extends the browser app in the areas you reported:
+Network3D Studio is a browser-first tool for turning network data into an editable 2D layout, mapping it into 3D, and then drawing or bundling edges for presentation-quality scenes.
 
-- 2D node color mapping now handles:
-  - original colors
-  - literal colors stored in attributes like `#ff8800` or `rgb(...)`
-  - numeric ramps
-  - categorical palettes
-- added a dedicated **Node size scale** navigator in the 2D stage
-- edge mode UI is now dynamic:
-  - only relevant controls stay visible per bundling method
-  - each method has a tuning/info box
-- the **Shortest-path legacy** bundler was rebuilt to actually route through alternate graph paths by excluding the original edge during search
-- edge preview remains visible in 2D and 3D stages
+It is designed to run as a static GitHub Pages app. No backend is required.
 
-## Files
+## Supported input
 
-- `index.html`
-- `styles/app.css`
-- `src/main.js`
-- `src/app.js`
-- `src/graph.js`
-- `src/parsers/gexf.js`
-- `src/parsers/csv.js`
-- `src/render/scene.js`
-- `src/render/nodes.js`
-- `src/render/edges.js`
-- `src/render/labels.js`
-- `src/utils/colors.js`
-- `src/utils/math.js`
-- `src/workers/layoutWorker.js`
-- `src/workers/bundleWorker.js`
+- GEXF (`.gexf` / `.xml`)
+- Nodes CSV + edges CSV
 
-## Notes
+Nodes CSV should include `id` and can also include `label`, `x`, `y`, `z`, `size`, `color`, plus any other attributes.
 
-- The legacy shortest-path bundler is intentionally limited by the point budget on large graphs. That is necessary in-browser.
-- For very large graphs, use lower samples and a tighter point budget first.
-- If you want the next revision, the highest-value additions are node dragging, community-aware bundling, and progressive file parsing for very large GEXF files.
+Edges CSV should include `source`, `target`, and optionally `weight`.
+
+## Workflow
+
+### 1. Input
+Upload either a GEXF file or a pair of nodes / edges CSV files, then click **Load graph**.
+
+### 2. 2D Layout
+Choose a layout source, adjust scaling, size, color, and ForceAtlas2 settings, then click **Apply 2D**.
+
+New in this build:
+- drag nodes directly in 2D
+- pinned-node editing
+- saved pins are respected in later ForceAtlas2 runs
+
+### 3. 3D Mapping
+Choose how depth is assigned:
+- flat
+- original z
+- random
+- degree / weighted degree
+- any numeric or categorical attribute
+
+### 4. Edge Bundling
+Choose a technique and tune it:
+- Straight
+- Arc
+- Hub bundle
+- Shortest-path legacy
+
+## Extra tools
+
+### Filters
+Use the filter panel to limit the visible graph by:
+- a categorical attribute (community, group, cluster, etc.)
+- a numeric range
+
+### Presets
+
+### Legend
+The legend is generated automatically from the current node color and size encodings.
+
+### Hover + selection
+- Hover a node to see a tooltip and highlight its local neighborhood.
+- Click a node to open a details panel.
+
+## Design tips
+
+- Start in 2D and get spacing, color, and size right before moving into 3D.
+- For large graphs, use filters first. Then bundle only the visible subgraph.
+- Use categorical color for communities and numeric size for centrality or activity.
+- Keep 3D depth meaning consistent. Do not mix unrelated metrics into the same scene unless you explain them in the legend.
+- For publication-style exports, use transparent PNG or SVG.
+
+

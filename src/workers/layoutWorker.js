@@ -58,6 +58,9 @@ function runForceAtlas2(payload) {
     strongGravityMode: Number(payload.gravity) > 4
   };
 
+  const pinned = new Map((payload.pinned || []).map((item) => [String(item.index), item]));
+  pinned.forEach((item, key) => graph.mergeNodeAttributes(key, { x: item.x, y: item.y }));
+
   const chunk = Math.max(5, Math.min(25, Math.floor(iterations / 8) || 10));
   let done = 0;
   while (done < iterations) {
@@ -68,6 +71,7 @@ function runForceAtlas2(payload) {
       getEdgeWeight: 'weight',
       settings
     });
+    pinned.forEach((item, key) => graph.mergeNodeAttributes(key, { x: item.x, y: item.y }));
     done += step;
     postProgress((done / iterations) * 100);
   }

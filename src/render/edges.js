@@ -5,6 +5,7 @@ export class EdgeRenderer {
     this.scene = scene;
     this.group = new THREE.Group();
     this.group.name = 'edge-layer';
+    this.group.renderOrder = 5;
     this.scene.add(this.group);
     this.lastDraw = { polylines: [], colors: [], opacity: 0.18 };
   }
@@ -67,6 +68,7 @@ export class EdgeRenderer {
 
     const segments = new THREE.LineSegments(geometry, material);
     segments.frustumCulled = false;
+    segments.renderOrder = 5;
     this.group.add(segments);
     this.lastDraw = { polylines, colors, opacity };
   }

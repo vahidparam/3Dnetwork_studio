@@ -16,25 +16,31 @@ export class LabelRenderer {
     this.labelIndexes = [];
   }
 
-  update({ labelsEnabled, count, fontSize, nodes, positions, metrics, camera, viewportWidth, viewportHeight, background }) {
+  update({ labelsEnabled, count, fontSize, nodes, positions, metrics, camera, viewportWidth, viewportHeight, background, visibleMask = null, focusIndexes = [] }) {
     if (!labelsEnabled || !nodes?.length || count <= 0) {
       this.clear();
       return;
     }
 
-    const scoreIndexes = nodes.map((_, i) => i)
+    const candidates = nodes.map((_, i) => i).filter((i) => !visibleMask || visibleMask[i]);
+    const scoreIndexes = candidates
       .sort((a, b) => (metrics.degree[b] || 0) - (metrics.degree[a] || 0))
-      .slice(0, Math.min(count, nodes.length));
+      .slice(0, Math.min(count, candidates.length));
+
+    const indexSet = new Set(scoreIndexes);
+    for (const focus of focusIndexes || []) {
+      if (focus != null && (!visibleMask || visibleMask[focus])) indexSet.add(focus);
+    }
 
     this.container.innerHTML = '';
     this.items = [];
-    this.labelIndexes = scoreIndexes;
+    this.labelIndexes = Array.from(indexSet);
 
     const color = colorLuminance(background) < 0.45 ? '#f8fbff' : '#16213b';
     this.lastColor = color;
     this.lastFontSize = fontSize;
 
-    for (const idx of scoreIndexes) {
+    for (const idx of this.labelIndexes) {
       const div = document.createElement('div');
       div.className = 'label-item';
       div.textContent = nodes[idx].label || nodes[idx].id;
@@ -52,9 +58,7 @@ export class LabelRenderer {
     for (let i = 0; i < this.labelIndexes.length; i += 1) {
       const idx = this.labelIndexes[i];
       const pos = positions[idx];
-      const projected = pos instanceof THREE.Vector3
-        ? pos.clone()
-        : new THREE.Vector3(pos.x, pos.y, pos.z || 0);
+      const projected = pos instanceof THREE.Vector3 ? pos.clone() : new THREE.Vector3(pos.x, pos.y, pos.z || 0);
       projected.project(camera);
       const visible = projected.z >= -1 && projected.z <= 1;
       const item = this.items[i];

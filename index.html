@@ -19,7 +19,7 @@
     <aside id="sidebar">
       <div class="brand">
         <div>
-          <h1>Network3D Studio</h1>
+          <h1>3D Network Studio</h1>
           <p>Browser-first 2D → 3D network workflow</p>
         </div>
         <button id="toggleSidebarBtn" class="ghost small">Hide</button>
@@ -34,24 +34,34 @@
 
       <section class="panel stage-panel" data-stage="1">
         <h2>Data Input</h2>
-<label class="field">
+        <label class="field">
           <span>GEXF file</span>
-          <input type="file" id="gexfFile" accept=".gexf,.xml" />
+          <div class="file-input-row">
+            <input type="file" id="gexfFile" accept=".gexf,.xml" />
+            <button id="clearGexfFileBtn" class="ghost icon-btn" type="button" title="Remove GEXF and clear scene" aria-label="Remove GEXF and clear scene">×</button>
+          </div>
         </label>
         <div class="or-sep">or</div>
         <label class="field">
           <span>Nodes CSV</span>
-          <input type="file" id="nodesCsvFile" accept=".csv" />
+          <div class="file-input-row">
+            <input type="file" id="nodesCsvFile" accept=".csv" />
+            <button id="clearNodesCsvFileBtn" class="ghost icon-btn" type="button" title="Remove nodes CSV and clear scene" aria-label="Remove nodes CSV and clear scene">×</button>
+          </div>
         </label>
         <label class="field">
           <span>Edges CSV</span>
-          <input type="file" id="edgesCsvFile" accept=".csv" />
+          <div class="file-input-row">
+            <input type="file" id="edgesCsvFile" accept=".csv" />
+            <button id="clearEdgesCsvFileBtn" class="ghost icon-btn" type="button" title="Remove edges CSV and clear scene" aria-label="Remove edges CSV and clear scene">×</button>
+          </div>
         </label>
         <button id="loadGraphBtn">Load graph</button>
         <div class="hint">
-          
-          Supported input: GEXF or nodes/edges CSV.<br/>Nodes CSV expected: <code>id</code>, optional <code>label</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>size</code>, <code>color</code>.<br/>
-          Edges CSV expected: <code>source</code>, <code>target</code>, optional <code>weight</code>.
+          Supported input: GEXF or nodes/edges CSV.<br/>
+          Nodes CSV expected: <code>id</code>, optional <code>label</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>size</code>, <code>color</code>.<br/>
+          Edges CSV expected: <code>source</code>, <code>target</code>, optional <code>weight</code>.<br/>
+          Large GEXF files use progressive loading feedback before parsing.
         </div>
       </section>
 
@@ -120,6 +130,19 @@
           </label>
         </div>
 
+        <div class="pin-edit-box">
+          <div class="grid2">
+            <label class="checkbox">
+              <input id="dragEditMode" type="checkbox" checked />
+              <span>2D drag edit mode</span>
+            </label>
+            <label class="checkbox">
+              <input id="showLegend" type="checkbox" checked />
+              <span>Show legend</span>
+            </label>
+          </div>
+          <div class="hint subtle">Drag nodes directly in the viewport while 2D edit mode is enabled. Moved nodes stay fixed in later ForceAtlas2 runs.</div>
+        </div>
 
         <div class="grid2">
           <label class="field">
@@ -201,6 +224,7 @@
               <option value="degree">Degree</option>
               <option value="weightedDegree">Weighted degree</option>
               <option value="attribute">Attribute</option>
+              <option value="globe">Globe (sphere)</option>
             </select>
           </label>
           <label class="field">
@@ -225,7 +249,7 @@
           <input id="zCategoryGap" type="range" min="0.5" max="30" step="0.1" value="8" />
         </label>
 
-        <div class="hint subtle" id="zHint">Attribute mode auto-detects numeric values or categorical groups and maps both into depth.</div>
+        <div class="hint subtle" id="zHint">Attribute mode auto-detects numeric values or categorical groups and maps both into depth. Globe maps the current 2D layout onto a sphere.</div>
 
         <div class="actions">
           <button id="backTo2DBtn" class="ghost">Back to 2D</button>
@@ -313,11 +337,14 @@
           <button id="clearEdgesBtn" class="ghost">Clear edges</button>
         </div>
       </section>
+
+      
     </aside>
 
     <main id="viewportWrap">
       <canvas id="viewport"></canvas>
       <div id="labelsLayer"></div>
+      <div id="tooltip" class="tooltip hidden"></div>
 
       <section id="floatingViewPanel" class="floating-panel">
         <div class="floating-panel-head">
@@ -362,34 +389,45 @@
           </label>
         </div>
 
-        <div class="grid2 compact-grid export-grid">
-          <label class="field">
-            <span>Export scale</span>
-            <select id="exportScale">
-              <option value="1">1×</option>
-              <option value="2" selected>2×</option>
-              <option value="3">3×</option>
-              <option value="4">4×</option>
-            </select>
-          </label>
-          <label class="checkbox compact-check">
-            <input id="transparentExport" type="checkbox" checked />
-            <span>Transparent export</span>
-          </label>
-        </div>
+        <label class="field compact-field">
+          <span>Export format</span>
+          <select id="exportFormat">
+            <option value="png" selected>PNG</option>
+            <option value="svg">SVG</option>
+            <option value="pdf">PDF</option>
+          </select>
+        </label>
 
-        <div class="actions compact-actions">
+        <label class="field compact-field">
+          <span>Export scale</span>
+          <select id="exportScale">
+            <option value="1">1×</option>
+            <option value="2" selected>2×</option>
+            <option value="3">3×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+
+        <label class="checkbox compact-check compact-stack">
+          <input id="transparentExport" type="checkbox" checked />
+          <span>Transparent export</span>
+        </label>
+
+        <div class="actions compact-actions compact-vertical-actions">
           <button id="fitViewBtn">Fit</button>
           <button id="resetSceneBtn" class="ghost">Reset</button>
-        </div>
-        <div class="actions compact-actions export-actions">
-          <button id="exportPngBtn">PNG</button>
-          <button id="exportSvgBtn">SVG</button>
-          <button id="exportPdfBtn">PDF</button>
+          <button id="exportSceneBtn">Export</button>
         </div>
       </section>
 
       <button id="showViewPanelBtn" class="floating-toggle hidden" type="button">View</button>
+
+      <section id="legendPanel" class="floating-panel legend-panel hidden">
+        <div class="floating-panel-head tight">
+          <h2>Legend</h2>
+        </div>
+        <div id="legendContent"></div>
+      </section>
 
       <section id="nodeInfoPanel" class="floating-panel hidden">
         <h2>Node details</h2>
@@ -410,6 +448,6 @@
     </main>
   </div>
 
-  <script type="module" src="./src/main.js"></script>
+  <script type="module" src="./src/main.js?v=20"></script>
 </body>
 </html>

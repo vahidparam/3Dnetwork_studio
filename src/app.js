@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { loadGraphFromFiles, buildGraph } from './graph.js';
 import { SceneController } from './render/scene.js';
-import { NodeRenderer } from './render/nodes.js';
+import { NodeRenderer } from './render/nodes.points.js';
 import { EdgeRenderer } from './render/edges.js';
 import { LabelRenderer } from './render/labels.js';
 import { categoricalColor, colorLuminance, ensureContrast, hexToColor, numericRamp, parseLiteralColor, boostVisibility } from './utils/colors.js';
@@ -12,9 +12,15 @@ function getEl(id) {
   return document.getElementById(id);
 }
 
-function setOptions(select, values) {
+function setOptions(select, values, { includeBlank = false, blankLabel = '—' } = {}) {
   select.innerHTML = '';
-  if (!values.length) {
+  if (includeBlank) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = blankLabel;
+    select.appendChild(option);
+  }
+  if (!values.length && !includeBlank) {
     const option = document.createElement('option');
     option.value = '';
     option.textContent = '—';
@@ -58,6 +64,22 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function colorToCss(color) {
+  return `#${color.getHexString()}`;
+}
+
+function mixColors(a, b, t = 0.5) {
+  return new THREE.Color(
+    a.r + (b.r - a.r) * t,
+    a.g + (b.g - a.g) * t,
+    a.b + (b.b - a.b) * t
+  );
+}
+
+function clonePositions(arr) {
+  return arr.map((p) => ({ x: p.x, y: p.y, z: p.z || 0 }));
+}
+
 export class App {
   constructor() {
     this.state = {
@@ -67,11 +89,20 @@ export class App {
       positions3D: [],
       nodeSizes: [],
       nodeColors: [],
+      nodeColorMeta: null,
+      nodeSizeMeta: null,
       stage: 1,
       activeView: '2d',
       selectedNodeIndex: null,
-      edgeLayer: { kind: 'preview', edgeIndexes: [] }
+      hoveredNodeIndex: null,
+      edgeLayer: { kind: 'preview', edgeIndexes: [] },
+      pinnedNodes: new Set(),
+      pinnedBasePositions: new Array(),
+      visibleMask: [],
+      dragState: null,
+      hoverPosition: { x: 0, y: 0 }
     };
+    this.suppressClick = false;
 
     this.dom = {
       canvas: getEl('viewport'),
@@ -85,7 +116,10 @@ export class App {
       nodeInfoPanel: getEl('nodeInfoPanel'),
       nodeInfoContent: getEl('nodeInfoContent'),
       viewPanel: getEl('floatingViewPanel'),
-      showViewPanelBtn: getEl('showViewPanelBtn')
+      showViewPanelBtn: getEl('showViewPanelBtn'),
+      legendPanel: getEl('legendPanel'),
+      legendContent: getEl('legendContent'),
+      tooltip: getEl('tooltip')
     };
 
     this.sceneController = new SceneController({
@@ -98,7 +132,11 @@ export class App {
     this.layoutWorker = null;
     this.bundleWorker = null;
     this.raycaster = new THREE.Raycaster();
+    this.raycaster.params.Points.threshold = 12;
     this.pointer = new THREE.Vector2();
+    this.dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    this.dragHit = new THREE.Vector3();
+    this.presetStorageKey = 'network3d-studio-presets-v3';
 
     this.bundleModeInfo = {
       straight: 'Straight mode draws direct links only. Use it for inspection, debugging, and very large graphs.',
@@ -116,6 +154,9 @@ export class App {
 
   bindEvents() {
     getEl('loadGraphBtn').addEventListener('click', () => this.handleLoadGraph());
+    getEl('clearGexfFileBtn').addEventListener('click', () => this.clearFileAndScene('gexfFile'));
+    getEl('clearNodesCsvFileBtn').addEventListener('click', () => this.clearFileAndScene('nodesCsvFile'));
+    getEl('clearEdgesCsvFileBtn').addEventListener('click', () => this.clearFileAndScene('edgesCsvFile'));
     getEl('apply2DBtn').addEventListener('click', () => this.run2D(false));
     getEl('finalize2DBtn').addEventListener('click', () => this.run2D(true));
     getEl('apply3DBtn').addEventListener('click', () => this.run3D(false));
@@ -143,6 +184,7 @@ export class App {
     getEl('showLabels').addEventListener('change', () => this.renderLabels());
     getEl('labelCount').addEventListener('input', () => this.renderLabels());
     getEl('labelSize').addEventListener('input', () => this.renderLabels());
+    getEl('showLegend').addEventListener('change', () => this.updateLegend());
 
     [
       'scaleX', 'scaleY', 'layoutGravity', 'layoutRepulsion',
@@ -169,16 +211,12 @@ export class App {
 
     ['edgeColorMode', 'edgeSingleColor', 'edgeOpacity'].forEach((id) => {
       const el = getEl(id);
-      el.addEventListener((el.type === 'range' || el.type === 'color') ? 'input' : 'change', () => {
-        this.redrawCurrentEdgeAppearance();
-      });
+      el.addEventListener((el.type === 'range' || el.type === 'color') ? 'input' : 'change', () => this.redrawCurrentEdgeAppearance());
     });
 
-    getEl('fitViewBtn').addEventListener('click', () => this.sceneController.fitToPositions(this.currentPositions()));
+    getEl('fitViewBtn').addEventListener('click', () => this.sceneController.fitToPositions(this.visiblePositions()));
     getEl('resetSceneBtn').addEventListener('click', () => this.resetScene());
-    getEl('exportPngBtn').addEventListener('click', () => this.exportPng());
-    getEl('exportSvgBtn').addEventListener('click', () => this.exportSvg());
-    getEl('exportPdfBtn').addEventListener('click', () => this.exportPdf());
+    getEl('exportSceneBtn').addEventListener('click', () => this.exportScene());
     getEl('hideViewPanelBtn').addEventListener('click', () => this.setViewPanelVisible(false));
     getEl('showViewPanelBtn').addEventListener('click', () => this.setViewPanelVisible(true));
 
@@ -200,19 +238,20 @@ export class App {
       });
     });
 
-    this.pointerDown = null;
-    this.dom.canvas.addEventListener('pointerdown', (event) => {
-      this.pointerDown = { x: event.clientX, y: event.clientY };
-    });
-    this.dom.canvas.addEventListener('pointerup', (event) => {
-      if (!this.pointerDown) return;
-      const dx = event.clientX - this.pointerDown.x;
-      const dy = event.clientY - this.pointerDown.y;
-      this.pointerDown = null;
-      if ((dx * dx) + (dy * dy) <= 25) this.handleSceneClick(event);
-    });
+
+    this.dom.canvas.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
+    window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
+    window.addEventListener('pointerup', (event) => this.handlePointerUp(event));
     this.dom.canvas.addEventListener('dblclick', (event) => this.handleSceneClick(event));
-    this.dom.canvas.addEventListener('click', (event) => this.handleSceneClick(event));
+    this.dom.canvas.addEventListener('click', (event) => {
+      if (this.suppressClick) { this.suppressClick = false; return; }
+      if (this.state.dragState && this.state.dragState.moved) return;
+      this.handleSceneClick(event);
+    });
+    this.dom.canvas.addEventListener('mouseleave', () => {
+      if (!this.state.dragState) this.setHoveredNode(null);
+      this.hideTooltip();
+    });
   }
 
   bindRangeValueMirrors() {
@@ -236,8 +275,9 @@ export class App {
 
   setStats() {
     const graph = this.state.graph;
+    const visibleCount = this.state.visibleMask?.length ? this.state.visibleMask.filter(Boolean).length : 0;
     this.dom.statsText.textContent = graph
-      ? `Nodes: ${graph.nodes.length.toLocaleString()} · Edges: ${graph.edges.length.toLocaleString()}`
+      ? `Nodes: ${graph.nodes.length.toLocaleString()} (${visibleCount.toLocaleString()} visible) · Edges: ${graph.edges.length.toLocaleString()}`
       : 'Nodes: 0 · Edges: 0';
   }
 
@@ -260,8 +300,44 @@ export class App {
     this.dom.progressValue.textContent = `${value}%`;
   }
 
-  hideProgress() {
-    this.dom.progressOverlay.classList.add('hidden');
+  hideProgress() { this.dom.progressOverlay.classList.add('hidden'); }
+
+  clearFileAndScene(inputId) {
+    const input = getEl(inputId);
+    if (input) input.value = '';
+    this.clearLoadedGraph();
+  }
+
+  clearLoadedGraph() {
+    this.state.graph = null;
+    this.state.base2DPositions = [];
+    this.state.positions2D = [];
+    this.state.positions3D = [];
+    this.state.nodeSizes = [];
+    this.state.nodeColors = [];
+    this.state.nodeColorMeta = null;
+    this.state.nodeSizeMeta = null;
+    this.state.activeView = '2d';
+    this.state.selectedNodeIndex = null;
+    this.state.hoveredNodeIndex = null;
+    this.state.edgeLayer = { kind: 'preview', edgeIndexes: [] };
+    this.state.pinnedNodes = new Set();
+    this.state.pinnedBasePositions = [];
+    this.state.visibleMask = [];
+    this.nodeRenderer.dispose();
+    this.edgeRenderer.clear();
+    this.labelRenderer.clear();
+    this.hideTooltip();
+    this.dom.nodeInfoPanel.classList.add('hidden');
+    this.dom.nodeInfoContent.innerHTML = '';
+    this.enableStage(2, false);
+    this.enableStage(3, false);
+    this.enableStage(4, false);
+    this.updateStageUI(1);
+    this.setStats();
+    this.updateLegend();
+    this.sceneController.fitToPositions([{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 80 }]);
+    this.setStatus('Scene cleared. Load a graph to begin.');
   }
 
   updateStageUI(stage) {
@@ -289,6 +365,105 @@ export class App {
     getEl('edgeTuningInfo').textContent = this.bundleModeInfo[mode] || '';
   }
 
+  getAllPresetIds() {
+    return [
+      'positionSource', 'layoutIterations', 'scaleX', 'scaleY', 'layoutGravity', 'layoutRepulsion',
+      'fa2BarnesHut', 'fa2AdjustSizes', 'fa2Outbound', 'fa2LinLog', 'dragEditMode', 'showLegend',
+      'nodeSizeMode', 'nodeSizeAttribute', 'nodeSizeMin', 'nodeSizeMax', 'nodeSizeScale',
+      'nodeColorMode', 'nodeColorAttribute', 'nodeSingleColor', 'nodeRampColor',
+      'zMode', 'zAttribute', 'zScale', 'zJitter', 'zCategoryGap',
+      'edgeMode', 'edgeColorMode', 'edgeSingleColor', 'edgeOpacity', 'bundleSamples', 'bundleHubCount', 'bundleLift', 'bundleDetour', 'legacyExponent', 'legacyExcludeDirect',
+      'backgroundColor', 'nodeDetail', 'showLabels', 'labelCount', 'labelSize', 'pointBudget', 'exportScale', 'transparentExport'
+    ];
+  }
+
+  readCurrentPreset() {
+    const controls = {};
+    for (const id of this.getAllPresetIds()) {
+      const el = getEl(id);
+      if (!el) continue;
+      controls[id] = el.type === 'checkbox' ? el.checked : el.value;
+    }
+    return {
+      controls,
+      pinnedNodes: Array.from(this.state.pinnedNodes),
+      pinnedBasePositions: this.state.pinnedBasePositions,
+      camera: {
+        position: this.sceneController.camera.position.toArray(),
+        target: this.sceneController.controls.target.toArray()
+      }
+    };
+  }
+
+  applyPresetControls(preset) {
+    if (!preset) return;
+    for (const [id, value] of Object.entries(preset.controls || {})) {
+      const el = getEl(id);
+      if (!el) continue;
+      if (el.type === 'checkbox') el.checked = !!value;
+      else el.value = value;
+    }
+    this.state.pinnedNodes = new Set((preset.pinnedNodes || []).map((v) => Number(v)));
+    this.state.pinnedBasePositions = preset.pinnedBasePositions || [];
+    if (preset.camera?.position && preset.camera?.target) {
+      this.sceneController.camera.position.fromArray(preset.camera.position);
+      this.sceneController.controls.target.fromArray(preset.camera.target);
+      this.sceneController.render();
+    }
+  }
+
+  getSavedPresets() {
+    try {
+      return JSON.parse(localStorage.getItem(this.presetStorageKey) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  savePreset() {
+    const name = (getEl('presetName').value || '').trim();
+    if (!name) {
+      alert('Enter a preset name first.');
+      return;
+    }
+    const presets = this.getSavedPresets();
+    presets[name] = this.readCurrentPreset();
+    localStorage.setItem(this.presetStorageKey, JSON.stringify(presets));
+    this.refreshPresetMenu(name);
+    this.setStatus(`Preset saved: ${name}`);
+  }
+
+  async loadPreset() {
+    const name = getEl('presetSelect').value;
+    if (!name) return;
+    const preset = this.getSavedPresets()[name];
+    if (!preset) return;
+    this.applyPresetControls(preset);
+    this.applyViewSettings();
+    if (this.state.graph) {
+      await this.run2D(false);
+      if (this.state.positions3D.length || getEl('zMode').value !== 'flat') await this.run3D(false);
+      if (this.state.edgeLayer.kind === 'custom') this.redrawCurrentEdgeAppearance();
+    }
+    this.setStatus(`Preset loaded: ${name}`);
+  }
+
+  deletePreset() {
+    const name = getEl('presetSelect').value;
+    if (!name) return;
+    const presets = this.getSavedPresets();
+    delete presets[name];
+    localStorage.setItem(this.presetStorageKey, JSON.stringify(presets));
+    this.setStatus(`Preset deleted: ${name}`);
+  }
+
+  refreshPresetMenu(selectName = '') {
+    const presets = this.getSavedPresets();
+    const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
+    setOptions(getEl('presetSelect'), names, { includeBlank: true, blankLabel: '— none —' });
+    if (selectName && names.includes(selectName)) getEl('presetSelect').value = selectName;
+  }
+
   inferBestNodeColoring({ excludeOriginal = false } = {}) {
     const graph = this.state.graph;
     if (!graph) return { mode: 'single', singleColor: '#7ec8ff', rampColor: '#ff9b66' };
@@ -309,8 +484,8 @@ export class App {
       const originalStats = colorStats(graph.nodes.map((node) => parseLiteralColor(this.getOriginalNodeColor(node))));
       if (originalStats.validCount >= Math.max(3, Math.floor(graph.nodes.length * 0.2))
         && originalStats.uniqueCount >= 3
-        && originalStats.darkRatio < 0.5
-        && originalStats.avgLuminance > 0.24) {
+        && originalStats.darkRatio < 0.7
+        && originalStats.avgLuminance > 0.18) {
         return { mode: 'original' };
       }
     }
@@ -322,13 +497,11 @@ export class App {
     let bestNumericScore = -Infinity;
 
     allAttrs.forEach((attr) => {
-      const values = graph.nodes
-        .map((node) => this.getNodeAttrValue(node, attr))
-        .filter((value) => value != null && String(value).trim() !== '');
+      const values = graph.nodes.map((node) => this.getNodeAttrValue(node, attr)).filter((value) => value != null && String(value).trim() !== '');
       if (!values.length) return;
 
       const literalStats = colorStats(values.map((value) => parseLiteralColor(value)));
-      if (literalStats.validCount / values.length > 0.6 && literalStats.uniqueCount >= 3 && literalStats.darkRatio < 0.55 && literalStats.avgLuminance > 0.20) {
+      if (literalStats.validCount / values.length > 0.6 && literalStats.uniqueCount >= 3 && literalStats.darkRatio < 0.8) {
         bestLiteralAttr = bestLiteralAttr || attr;
       }
 
@@ -386,17 +559,37 @@ export class App {
     const gexfFile = getEl('gexfFile').files[0];
     const nodesCsvFile = getEl('nodesCsvFile').files[0];
     const edgesCsvFile = getEl('edgesCsvFile').files[0];
+    if (!gexfFile && !(nodesCsvFile && edgesCsvFile)) {
+      this.setStatus('Choose one GEXF file, or both nodes and edges CSV files.');
+      return;
+    }
     try {
+      this.showProgress('Loading graph…');
       this.setStatus('Loading graph…');
-      const rawGraph = await loadGraphFromFiles({ gexfFile, nodesCsvFile, edgesCsvFile });
+      const rawGraph = await loadGraphFromFiles({
+        gexfFile,
+        nodesCsvFile,
+        edgesCsvFile,
+        onPhase: (title) => { this.dom.progressTitle.textContent = title; },
+        onProgress: (percent) => this.setProgress(percent)
+      });
+      this.dom.progressTitle.textContent = 'Building graph…';
+      this.setProgress(100);
       this.state.graph = buildGraph(rawGraph);
       this.state.base2DPositions = [];
       this.state.positions2D = [];
       this.state.positions3D = [];
       this.state.nodeSizes = [];
       this.state.nodeColors = [];
+      this.state.nodeColorMeta = null;
+      this.state.nodeSizeMeta = null;
       this.state.activeView = '2d';
       this.state.selectedNodeIndex = null;
+      this.state.hoveredNodeIndex = null;
+      this.state.edgeLayer = { kind: 'preview', edgeIndexes: [] };
+      this.state.pinnedNodes = new Set();
+      this.state.pinnedBasePositions = new Array(this.state.graph.nodes.length).fill(null);
+      this.state.visibleMask = new Array(this.state.graph.nodes.length).fill(true);
       this.hideSelectedNode();
       this.edgeRenderer.clear();
 
@@ -411,13 +604,14 @@ export class App {
 
       await this.run2D(false);
       this.updateStageUI(2);
+      this.hideProgress();
       this.setStatus('Graph loaded. Adjust the 2D layout.');
     } catch (error) {
       console.error(error);
       this.hideProgress();
       const message = error?.message || 'Failed to load graph.';
       this.setStatus(message);
-      alert(message)
+      alert(message);
     }
   }
 
@@ -427,9 +621,9 @@ export class App {
     if (!colorAttributes.includes('color')) colorAttributes.unshift('color');
     const zAttributes = [...graph.attributes.nodeAll];
     if (!zAttributes.includes('size') && graph.attributes.nodeNumeric.includes('size')) zAttributes.unshift('size');
-    setOptions(getEl('nodeSizeAttribute'), graph.attributes.nodeNumeric);
-    setOptions(getEl('nodeColorAttribute'), colorAttributes);
-    setOptions(getEl('zAttribute'), zAttributes);
+    setOptions(getEl('nodeSizeAttribute'), graph.attributes.nodeNumeric, { includeBlank: true, blankLabel: '— none —' });
+    setOptions(getEl('nodeColorAttribute'), colorAttributes, { includeBlank: true, blankLabel: '— auto —' });
+    setOptions(getEl('zAttribute'), zAttributes, { includeBlank: true, blankLabel: '— none —' });
 
     if (colorAttributes.length) getEl('nodeColorAttribute').value = colorAttributes[0];
     if (zAttributes.length) getEl('zAttribute').value = zAttributes[0];
@@ -437,9 +631,28 @@ export class App {
       getEl('nodeSizeMode').value = 'degree';
       getEl('zMode').value = graph.flags.hasZPositions ? 'original' : 'degree';
     }
+
+  }
+
+  renderCategoryFilterValues() {
+    return;
+  }
+
+  applyFilters() {
+    if (this.state.graph) {
+      this.state.visibleMask = new Array(this.state.graph.nodes.length).fill(true);
+      this.setStats();
+      this.renderCurrentView(true);
+      this.updateLegend();
+    }
+  }
+
+  resetFilters() {
+    this.applyFilters();
   }
 
   collect2DSettings() {
+
     return {
       positionSource: getEl('positionSource').value,
       iterations: Number(getEl('layoutIterations').value),
@@ -473,6 +686,32 @@ export class App {
     };
   }
 
+  mapPositionsToGlobe(base2D, radius) {
+    if (!base2D.length) return [];
+    const xs = base2D.map((p) => p.x || 0);
+    const ys = base2D.map((p) => p.y || 0);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const spanX = Math.max(1e-6, maxX - minX);
+    const spanY = Math.max(1e-6, maxY - minY);
+    const r = Math.max(10, radius);
+
+    return base2D.map((pos) => {
+      const u = ((pos.x || 0) - minX) / spanX;
+      const v = ((pos.y || 0) - minY) / spanY;
+      const lon = (u - 0.5) * Math.PI * 2.0;
+      const lat = (0.5 - v) * Math.PI;
+      const cosLat = Math.cos(lat);
+      return {
+        x: r * cosLat * Math.cos(lon),
+        y: r * Math.sin(lat),
+        z: r * cosLat * Math.sin(lon)
+      };
+    });
+  }
+
   collectEdgeSettings() {
     return {
       algorithm: getEl('edgeMode').value,
@@ -503,7 +742,7 @@ export class App {
     this.state.base2DPositions = basePositions;
     this.state.activeView = '2d';
     this.apply2DVisualPreview();
-    if (!this.state.positions3D.length) this.sceneController.fitToPositions(this.state.positions2D);
+    if (!this.state.positions3D.length) this.sceneController.fitToPositions(this.visiblePositions('2d'));
     this.setStatus(finalize ? '2D layout finalized. Map the graph into 3D.' : '2D layout applied.');
     if (finalize) this.updateStageUI(3);
   }
@@ -511,22 +750,31 @@ export class App {
   async compute2DLayout(settings) {
     const graph = this.state.graph;
     if (settings.positionSource !== 'forceatlas2') {
-      return this.computeFast2DLayout(settings.positionSource, graph);
+      const positions = this.computeFast2DLayout(settings.positionSource, graph);
+      return positions.map((p, index) => this.state.pinnedNodes.has(index) && this.state.pinnedBasePositions[index] ? { ...this.state.pinnedBasePositions[index] } : p);
     }
 
     this.showProgress('Computing ForceAtlas2 layout…');
     if (this.layoutWorker) this.layoutWorker.terminate();
     this.layoutWorker = new Worker(new URL('./workers/layoutWorker.js', import.meta.url), { type: 'module' });
+    const pinned = Array.from(this.state.pinnedNodes).map((index) => ({ index, x: this.state.pinnedBasePositions[index]?.x ?? this.state.base2DPositions[index]?.x ?? 0, y: this.state.pinnedBasePositions[index]?.y ?? this.state.base2DPositions[index]?.y ?? 0 }));
 
     return new Promise((resolve, reject) => {
       this.layoutWorker.onmessage = (event) => {
-        const { type, positions, percent } = event.data;
+        const { type, positions, percent, message } = event.data;
         if (type === 'progress') return this.setProgress(percent);
+        if (type === 'error') {
+          this.hideProgress();
+          this.layoutWorker?.terminate();
+          this.layoutWorker = null;
+          reject(new Error(message || 'ForceAtlas2 failed.'));
+          return;
+        }
         if (type === 'result') {
           this.hideProgress();
           this.layoutWorker.terminate();
           this.layoutWorker = null;
-          resolve(positions);
+          resolve(positions.map((p, index) => this.state.pinnedNodes.has(index) && this.state.pinnedBasePositions[index] ? { ...this.state.pinnedBasePositions[index] } : p));
         }
       };
       this.layoutWorker.onerror = (error) => {
@@ -536,7 +784,7 @@ export class App {
         reject(error);
       };
       this.layoutWorker.postMessage({
-        nodes: graph.nodes.map((node) => ({ x: node.x, y: node.y })),
+        nodes: graph.nodes.map((node) => ({ x: node.x, y: node.y, size: node.size })),
         edges: graph.edges.map((edge) => ({ sourceIndex: edge.sourceIndex, targetIndex: edge.targetIndex, weight: edge.weight })),
         iterations: settings.iterations,
         gravity: settings.gravity,
@@ -544,7 +792,8 @@ export class App {
         barnesHutOptimize: settings.fa2BarnesHut,
         adjustSizes: settings.fa2AdjustSizes,
         outboundAttractionDistribution: settings.fa2Outbound,
-        linLogMode: settings.fa2LinLog
+        linLogMode: settings.fa2LinLog,
+        pinned
       });
     });
   }
@@ -597,13 +846,13 @@ export class App {
     const graph = this.state.graph;
     if (!graph || !this.state.base2DPositions.length) return;
     const settings = this.collect2DSettings();
-    this.state.positions2D = this.state.base2DPositions.map((p) => ({ x: p.x * settings.scaleX, y: p.y * settings.scaleY, z: 0 }));
+    this.state.positions2D = this.state.base2DPositions.map((p, index) => {
+      const base = this.state.pinnedNodes.has(index) && this.state.pinnedBasePositions[index] ? this.state.pinnedBasePositions[index] : p;
+      return { x: base.x * settings.scaleX, y: base.y * settings.scaleY, z: 0 };
+    });
     this.computeNodeEncodings(settings);
-    if (this.state.activeView === '2d' || !this.state.positions3D.length) {
-      this.renderCurrentView();
-    } else {
-      this.run3D(false);
-    }
+    if (this.state.activeView === '2d' || !this.state.positions3D.length) this.renderCurrentView();
+    else this.run3D(false);
   }
 
   getNodeAttrValue(node, attrName) {
@@ -634,8 +883,8 @@ export class App {
     const graph = this.state.graph;
     const nodeSizes = new Array(graph.nodes.length);
     const nodeColors = new Array(graph.nodes.length);
-
     let sizeValues = graph.nodes.map(() => 1);
+
     if (settings.nodeSizeMode === 'degree') sizeValues = [...graph.metrics.degree];
     else if (settings.nodeSizeMode === 'weightedDegree') sizeValues = [...graph.metrics.weightedDegree];
     else if (settings.nodeSizeMode === 'attribute') sizeValues = graph.nodes.map((node) => this.coerceNumeric(this.getNodeAttrValue(node, settings.nodeSizeAttribute)));
@@ -651,11 +900,14 @@ export class App {
         : settings.nodeSizeMin + normalized * (settings.nodeSizeMax - settings.nodeSizeMin);
       nodeSizes[i] = Math.max(0.0001, base * settings.nodeSizeScale);
     }
+    this.state.nodeSizeMeta = { mode: settings.nodeSizeMode, min: minValue, max: maxValue, attribute: settings.nodeSizeAttribute };
 
     const background = hexToColor(getEl('backgroundColor').value);
     let numericRange = null;
     let literalColorRatio = 0;
     let categoricalCount = 0;
+    let categoryMap = null;
+    let colorMeta = { mode: settings.nodeColorMode };
 
     if (settings.nodeColorMode === 'attribute') {
       const values = graph.nodes.map((node) => this.getNodeAttrValue(node, settings.nodeColorAttribute));
@@ -665,14 +917,22 @@ export class App {
       categoricalCount = new Set(values.filter((value) => value != null && String(value).trim() !== '').map((value) => String(value))).size;
       if (numericValues.length && literalColorRatio < 0.5) {
         numericRange = { min: Math.min(...numericValues), max: Math.max(...numericValues) };
+        colorMeta = { mode: 'numeric', attribute: settings.nodeColorAttribute, ...numericRange, start: settings.nodeSingleColor, end: settings.nodeRampColor };
+      } else if (literalColorRatio > 0.6) {
+        colorMeta = { mode: 'literal', attribute: settings.nodeColorAttribute };
+      } else {
+        categoryMap = new Map();
+        colorMeta = { mode: 'categorical', attribute: settings.nodeColorAttribute, categories: categoryMap };
       }
       if (literalColorRatio > 0.6) getEl('nodeColorHint').textContent = 'The selected attribute contains explicit colors. They are now used directly.';
       else if (numericRange) getEl('nodeColorHint').textContent = 'The selected attribute is numeric. Nodes use a continuous color ramp.';
       else getEl('nodeColorHint').textContent = `The selected attribute is treated as categorical (${categoricalCount} categories detected).`;
     } else if (settings.nodeColorMode === 'original') {
       getEl('nodeColorHint').textContent = 'Using original node colors from the uploaded graph when available.';
+      colorMeta = { mode: 'original' };
     } else {
       getEl('nodeColorHint').textContent = 'Single color mode applies one consistent color to all nodes.';
+      colorMeta = { mode: 'single', color: settings.nodeSingleColor };
     }
 
     for (let i = 0; i < graph.nodes.length; i += 1) {
@@ -692,129 +952,89 @@ export class App {
           color = numericRamp(numericValue, numericRange.min, numericRange.max, settings.nodeSingleColor, settings.nodeRampColor);
         } else if (value != null && String(value).trim() !== '') {
           color = categoricalColor(value);
+          if (categoryMap && !categoryMap.has(String(value))) categoryMap.set(String(value), color.clone());
         } else {
           color = parseLiteralColor(this.getOriginalNodeColor(node)) || hexToColor(settings.nodeSingleColor);
         }
       }
-      color = ensureContrast(color, background);
-      if (colorLuminance(background) < 0.45) {
-        const lum = colorLuminance(color);
-        const hsl = {};
-        color.getHSL(hsl);
-        if (lum < 0.18 && hsl.s < 0.08) {
-          color = hexToColor(settings.nodeSingleColor);
-        } else if (lum < 0.38) {
-          color = boostVisibility(color, Math.max(0.18, 0.42 - lum));
-        }
-      }
+      color = ensureContrast(color, background, 0.12);
+      if (colorLuminance(background) < 0.45) color = boostVisibility(color, 0.12);
       nodeColors[i] = color;
-    }
-
-    const uniqueCount = new Set(nodeColors.map((color) => color.getHexString())).size;
-    const darkRatio = nodeColors.filter((color) => colorLuminance(color) < 0.22).length / Math.max(1, nodeColors.length);
-    if ((settings.nodeColorMode === 'original' || settings.nodeColorMode === 'attribute') && (uniqueCount <= 2 || darkRatio > 0.72)) {
-      const fallback = this.inferBestNodeColoring({ excludeOriginal: true });
-      if (fallback.mode === 'attribute' && fallback.attribute && fallback.attribute !== settings.nodeColorAttribute) {
-        getEl('nodeColorMode').value = 'attribute';
-        getEl('nodeColorAttribute').value = fallback.attribute;
-        if (fallback.rampColor) getEl('nodeRampColor').value = fallback.rampColor;
-        getEl('nodeColorHint').textContent = `The previous coloring had very low visible contrast, so the view switched to ${fallback.attribute}.`;
-        return this.computeNodeEncodings({
-          ...settings,
-          nodeColorMode: 'attribute',
-          nodeColorAttribute: fallback.attribute,
-          nodeRampColor: fallback.rampColor || settings.nodeRampColor
-        });
-      }
-      if (settings.nodeColorMode !== 'single') {
-        getEl('nodeColorMode').value = 'single';
-        getEl('nodeColorHint').textContent = 'The previous coloring had very low visible contrast, so the view switched to a brighter single color.';
-        return this.computeNodeEncodings({
-          ...settings,
-          nodeColorMode: 'single',
-          nodeSingleColor: '#7ec8ff'
-        });
-      }
     }
 
     this.state.nodeSizes = nodeSizes;
     this.state.nodeColors = nodeColors;
+    this.state.nodeColorMeta = colorMeta;
   }
 
   getCategoricalLayerMap(attrName) {
     const graph = this.state.graph;
-    const values = graph.nodes.map((node) => this.getNodeAttrValue(node, attrName));
-    const distinct = [...new Set(values.filter((value) => value != null && String(value).trim() !== '').map((value) => String(value)))].sort((a, b) => a.localeCompare(b));
-    return new Map(distinct.map((value, index) => [value, index]));
+    const values = graph.nodes.map((node) => this.getNodeAttrValue(node, attrName)).filter((value) => value != null && String(value).trim() !== '');
+    const counts = new Map();
+    values.forEach((value) => counts.set(String(value), (counts.get(String(value)) || 0) + 1));
+    const ordered = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return new Map(ordered.map(([value], index) => [value, index]));
   }
 
-  describeZMode(settings) {
+  async run3D(finalize) {
     const graph = this.state.graph;
-    if (!graph) return;
-    if (settings.zMode !== 'attribute') {
-      getEl('zHint').textContent = 'Choose a node attribute to map numeric values or categorical groups into depth.';
-      return;
-    }
-    const rawValues = graph.nodes.map((node) => this.getNodeAttrValue(node, settings.zAttribute));
-    const numericValues = rawValues.map((value) => this.coerceNumeric(value)).filter((value) => Number.isFinite(value));
-    const nonEmpty = rawValues.filter((value) => value != null && String(value).trim() !== '');
-    const categoricalCount = new Set(nonEmpty.map((value) => String(value))).size;
-    if (numericValues.length >= Math.max(3, Math.floor(nonEmpty.length * 0.6))) {
-      getEl('zHint').textContent = 'The selected Z attribute is numeric. Values are scaled continuously in depth.';
-    } else {
-      getEl('zHint').textContent = `The selected Z attribute is categorical. ${categoricalCount} depth layers are currently detected.`;
-    }
-  }
-
-  run3D(finalize) {
-    const graph = this.state.graph;
-    if (!graph) return;
+    if (!graph || !this.state.positions2D.length) return;
     const settings = this.collect3DSettings();
-    this.describeZMode(settings);
-    const base2D = this.state.positions2D.length
-      ? this.state.positions2D
-      : graph.nodes.map((node) => ({ x: node.x || 0, y: node.y || 0, z: 0 }));
-
-    let categoricalLayerMap = null;
+    const base2D = clonePositions(this.state.positions2D);
     let numericRange = null;
+    let categoricalLayerMap = null;
+
     if (settings.zMode === 'attribute') {
       const rawValues = graph.nodes.map((node) => this.getNodeAttrValue(node, settings.zAttribute));
       const numericValues = rawValues.map((value) => this.coerceNumeric(value)).filter((value) => Number.isFinite(value));
-      if (numericValues.length >= Math.max(3, Math.floor(Math.max(1, rawValues.length) * 0.6))) {
+      if (numericValues.length >= Math.max(3, Math.floor(graph.nodes.length * 0.5))) {
         numericRange = { min: Math.min(...numericValues), max: Math.max(...numericValues) };
       } else {
         categoricalLayerMap = this.getCategoricalLayerMap(settings.zAttribute);
       }
     }
 
-    this.state.positions3D = base2D.map((pos, index) => {
-      const node = graph.nodes[index];
-      let z = 0;
-      if (settings.zMode === 'original') z = Number.isFinite(node.z) ? node.z : 0;
-      else if (settings.zMode === 'random') z = (Math.random() - 0.5) * settings.zScale * 10;
-      else if (settings.zMode === 'degree') z = graph.metrics.degree[index];
-      else if (settings.zMode === 'weightedDegree') z = graph.metrics.weightedDegree[index];
-      else if (settings.zMode === 'attribute') {
-        const raw = this.getNodeAttrValue(node, settings.zAttribute);
-        const numeric = this.coerceNumeric(raw);
-        if (numericRange && Number.isFinite(numeric)) {
-          const t = (numeric - numericRange.min) / ((numericRange.max - numericRange.min) || 1);
-          z = (t - 0.5) * 2 * settings.zScale * 10;
-        } else if (categoricalLayerMap && raw != null && String(raw).trim() !== '') {
-          const layer = categoricalLayerMap.get(String(raw)) || 0;
-          const centered = layer - ((categoricalLayerMap.size - 1) / 2);
-          z = centered * settings.zCategoryGap;
-        }
+    if (settings.zMode === 'globe') {
+      this.state.positions3D = this.mapPositionsToGlobe(base2D, settings.zScale * 8);
+      if (settings.zJitter > 0) {
+        this.state.positions3D = this.state.positions3D.map((pos) => {
+          const dir = new THREE.Vector3(pos.x, pos.y, pos.z).normalize();
+          const delta = (Math.random() - 0.5) * settings.zJitter * 2;
+          return { x: pos.x + dir.x * delta, y: pos.y + dir.y * delta, z: pos.z + dir.z * delta };
+        });
       }
-      if (settings.zMode !== 'random' && settings.zMode !== 'attribute') z *= settings.zScale;
-      if (settings.zJitter > 0) z += (Math.random() - 0.5) * settings.zJitter * 10;
-      return { x: pos.x, y: pos.y, z };
-    });
+    } else {
+      this.state.positions3D = base2D.map((pos, index) => {
+        const node = graph.nodes[index];
+        let z = 0;
+        if (settings.zMode === 'original') z = Number.isFinite(node.z) ? node.z : 0;
+        else if (settings.zMode === 'random') z = (Math.random() - 0.5) * settings.zScale * 10;
+        else if (settings.zMode === 'degree') z = graph.metrics.degree[index];
+        else if (settings.zMode === 'weightedDegree') z = graph.metrics.weightedDegree[index];
+        else if (settings.zMode === 'attribute') {
+          const raw = this.getNodeAttrValue(node, settings.zAttribute);
+          const numeric = this.coerceNumeric(raw);
+          if (numericRange && Number.isFinite(numeric)) {
+            const t = (numeric - numericRange.min) / ((numericRange.max - numericRange.min) || 1);
+            z = (t - 0.5) * 2 * settings.zScale * 10;
+          } else if (categoricalLayerMap && raw != null && String(raw).trim() !== '') {
+            const layer = categoricalLayerMap.get(String(raw)) || 0;
+            const centered = layer - ((categoricalLayerMap.size - 1) / 2);
+            z = centered * settings.zCategoryGap;
+          }
+        }
+        if (settings.zMode !== 'random' && settings.zMode !== 'attribute') z *= settings.zScale;
+        if (settings.zJitter > 0) z += (Math.random() - 0.5) * settings.zJitter * 10;
+        return { x: pos.x, y: pos.y, z };
+      });
+    }
 
     this.state.activeView = '3d';
     this.renderCurrentView(true);
-    this.sceneController.fitToPositions(this.state.positions3D);
-    this.setStatus(finalize ? '3D mapping finalized. Draw edges or run bundling.' : '3D mapping applied.');
+    this.sceneController.fitToPositions(this.visiblePositions('3d'));
+    this.setStatus(finalize
+      ? (settings.zMode === 'globe' ? 'Globe mapping finalized. Draw edges or run bundling.' : '3D mapping finalized. Draw edges or run bundling.')
+      : (settings.zMode === 'globe' ? 'Globe mapping applied.' : '3D mapping applied.'));
     if (finalize) this.updateStageUI(4);
   }
 
@@ -825,24 +1045,59 @@ export class App {
     return [];
   }
 
+  visiblePositions(view = null) {
+    const positions = view === '3d' ? this.state.positions3D : view === '2d' ? this.state.positions2D : this.currentPositions();
+    if (!positions.length) return [];
+    const mask = this.state.visibleMask?.length ? this.state.visibleMask : positions.map(() => true);
+    const visible = positions.filter((_, i) => mask[i]);
+    return visible.length ? visible : positions;
+  }
+
+  getFocusSet() {
+    const graph = this.state.graph;
+    const focus = new Set();
+    if (!graph) return focus;
+    const hover = this.state.hoveredNodeIndex;
+    const selected = this.state.selectedNodeIndex;
+    if (hover != null && hover >= 0) {
+      focus.add(hover);
+      for (const neighbor of graph.metrics.neighbors[hover] || []) focus.add(neighbor);
+    }
+    if (selected != null && selected >= 0) {
+      focus.add(selected);
+      for (const neighbor of graph.metrics.neighbors[selected] || []) focus.add(neighbor);
+    }
+    return focus;
+  }
+
+  displayedNodeColors() {
+    const colors = this.state.nodeColors.map((color) => color.clone());
+    const focus = this.getFocusSet();
+    if (!focus.size) return colors;
+    return colors.map((color, index) => focus.has(index) ? boostVisibility(color, 0.16) : color);
+  }
+
   renderCurrentView(resetEdges = true) {
     this.renderNodes();
-    if (resetEdges || this.state.edgeLayer.kind !== 'custom' || !this.edgeRenderer.lastDraw.polylines.length) {
-      this.drawPreviewEdges();
-    } else {
-      this.redrawCurrentEdgeAppearance();
-    }
+    if (resetEdges || this.state.edgeLayer.kind !== 'custom' || !this.edgeRenderer.lastDraw.polylines.length) this.drawPreviewEdges();
+    else this.redrawCurrentEdgeAppearance();
+    this.updateLegend();
     this.sceneController.render();
   }
 
   renderNodes() {
     const positions = this.currentPositions();
     if (!positions.length) return;
+    const focus = this.getFocusSet();
     this.nodeRenderer.update({
       positions,
       sizes: this.state.nodeSizes.length ? this.state.nodeSizes : positions.map(() => 1),
-      colors: this.state.nodeColors.length ? this.state.nodeColors : positions.map(() => new THREE.Color('#6fb1ff')),
-      detail: Number(getEl('nodeDetail').value)
+      colors: this.displayedNodeColors(),
+      detail: Number(getEl('nodeDetail').value),
+      visibleMask: this.state.visibleMask,
+      emphasisSet: focus,
+      selectedIndex: this.state.selectedNodeIndex ?? -1,
+      viewportHeight: this.sceneController.getViewportSize().height
     });
     this.renderLabels();
     this.sceneController.render();
@@ -855,6 +1110,9 @@ export class App {
       this.labelRenderer.clear();
       return;
     }
+    const focus = [];
+    if (this.state.selectedNodeIndex != null) focus.push(this.state.selectedNodeIndex);
+    if (this.state.hoveredNodeIndex != null) focus.push(this.state.hoveredNodeIndex);
     this.labelRenderer.update({
       labelsEnabled: getEl('showLabels').checked,
       count: Number(getEl('labelCount').value),
@@ -865,7 +1123,9 @@ export class App {
       camera: this.sceneController.camera,
       viewportWidth: this.dom.canvas.clientWidth,
       viewportHeight: this.dom.canvas.clientHeight,
-      background: hexToColor(getEl('backgroundColor').value)
+      background: hexToColor(getEl('backgroundColor').value),
+      visibleMask: this.state.visibleMask,
+      focusIndexes: focus
     });
   }
 
@@ -873,6 +1133,48 @@ export class App {
     const positions = this.currentPositions();
     if (!positions.length) return;
     this.labelRenderer.project(positions, camera, this.dom.canvas.clientWidth, this.dom.canvas.clientHeight);
+  }
+
+  updateLegend() {
+    const visible = getEl('showLegend').checked;
+    this.dom.legendPanel.classList.toggle('hidden', !visible || !this.state.graph);
+    if (!visible || !this.state.graph) return;
+
+    const sections = [];
+    const colorMeta = this.state.nodeColorMeta || { mode: 'single', color: getEl('nodeSingleColor').value };
+    if (colorMeta.mode === 'single') {
+      sections.push(`<div class="legend-section"><div class="legend-title">Node color</div><div class="legend-row"><span class="swatch" style="background:${escapeHtml(colorMeta.color || getEl('nodeSingleColor').value)}"></span><span>Single color</span></div></div>`);
+    } else if (colorMeta.mode === 'numeric') {
+      sections.push(`<div class="legend-section"><div class="legend-title">Node color · ${escapeHtml(colorMeta.attribute || '')}</div><div class="ramp" style="background:linear-gradient(90deg, ${escapeHtml(colorMeta.start)}, ${escapeHtml(colorMeta.end)})"></div><div class="ramp-labels"><span>${formatValue(colorMeta.min ?? 0, 2)}</span><span>${formatValue(colorMeta.max ?? 1, 2)}</span></div></div>`);
+    } else if (colorMeta.mode === 'categorical') {
+      const rows = Array.from(colorMeta.categories?.entries?.() || []).slice(0, 10).map(([label, color]) => `<div class="legend-row"><span class="swatch" style="background:${colorToCss(color)}"></span><span title="${escapeHtml(label)}">${escapeHtml(label)}</span></div>`).join('');
+      sections.push(`<div class="legend-section"><div class="legend-title">Node color · ${escapeHtml(colorMeta.attribute || '')}</div>${rows || '<div class="hint subtle">Category colors will appear after rendering.</div>'}</div>`);
+    } else if (colorMeta.mode === 'literal' || colorMeta.mode === 'original') {
+      const seen = new Set();
+      const sampleRows = [];
+      for (const c of (this.state.nodeColors || []).filter(Boolean)) {
+        const hex = `#${(c?.getHexString ? c.getHexString() : hexToColor(c).getHexString())}`;
+        if (seen.has(hex)) continue;
+        seen.add(hex);
+        sampleRows.push(`<div class="legend-row"><span class="swatch" style="background:${hex}"></span><span>${hex}</span></div>`);
+        if (sampleRows.length >= 8) break;
+      }
+      const fallbackText = colorMeta.mode === 'original' ? 'Using original colors stored in the graph.' : 'Using literal colors stored in the selected attribute.';
+      sections.push(`<div class="legend-section"><div class="legend-title">Node color</div>${sampleRows.join('') || `<div class="hint subtle">${fallbackText}</div>`}</div>`);
+    }
+
+    const sizeMeta = this.state.nodeSizeMeta;
+    if (sizeMeta) {
+      const sizes = [0.7, 1.2, 1.8].map((s) => `<span class="size-dot" style="width:${12 * s}px;height:${12 * s}px"></span>`).join('');
+      const title = sizeMeta.mode === 'attribute' ? `Node size · ${escapeHtml(sizeMeta.attribute || '')}` : `Node size · ${escapeHtml(sizeMeta.mode)}`;
+      const minText = Number.isFinite(sizeMeta.min) ? formatValue(sizeMeta.min, 2) : 'low';
+      const maxText = Number.isFinite(sizeMeta.max) ? formatValue(sizeMeta.max, 2) : 'high';
+      sections.push(`<div class="legend-section"><div class="legend-title">${title}</div><div class="size-dots">${sizes}</div><div class="ramp-labels"><span>${minText}</span><span>${maxText}</span></div></div>`);
+    }
+
+    const visibleCount = this.state.visibleMask?.filter(Boolean).length || this.state.graph.nodes.length;
+    sections.push(`<div class="legend-section"><div class="legend-title">Scene</div><div class="legend-row"><span>${visibleCount.toLocaleString()} visible nodes</span></div></div>`);
+    this.dom.legendContent.innerHTML = sections.join('');
   }
 
   applyViewSettings() {
@@ -885,6 +1187,20 @@ export class App {
     } else {
       this.renderLabels();
     }
+    this.updateLegend();
+  }
+
+  visibleEdgeIndexes() {
+    const graph = this.state.graph;
+    const mask = this.state.visibleMask?.length ? this.state.visibleMask : null;
+    if (!graph) return [];
+    if (!mask) return graph.edges.map((_, index) => index);
+    const indexes = [];
+    for (let i = 0; i < graph.edges.length; i += 1) {
+      const edge = graph.edges[i];
+      if (mask[edge.sourceIndex] && mask[edge.targetIndex]) indexes.push(i);
+    }
+    return indexes;
   }
 
   previewEdgeSelection(positions, algorithm = 'straight') {
@@ -894,23 +1210,27 @@ export class App {
     const samples = Math.max(2, Number(getEl('bundleSamples').value) || 8);
     const multiplier = algorithm === 'straight' ? 2 : Math.max(4, samples * 2);
     const maxPreviewEdges = Math.max(120, Math.floor(pointBudget / multiplier));
-    if (graph.edges.length <= maxPreviewEdges) {
-      return { edges: graph.edges, indexes: graph.edges.map((_, index) => index), subset: null };
+    const visibleIndexes = this.visibleEdgeIndexes();
+    if (visibleIndexes.length <= maxPreviewEdges) {
+      return { edges: visibleIndexes.map((index) => graph.edges[index]), indexes: visibleIndexes, subset: null };
     }
-    const indexes = evenlySampleIndexes(graph.edges.length, maxPreviewEdges);
+    const sampleIndexes = evenlySampleIndexes(visibleIndexes.length, maxPreviewEdges).map((index) => visibleIndexes[index]);
     return {
-      edges: indexes.map((index) => graph.edges[index]),
-      indexes,
-      subset: { drawn: indexes.length, total: graph.edges.length }
+      edges: sampleIndexes.map((index) => graph.edges[index]),
+      indexes: sampleIndexes,
+      subset: { drawn: sampleIndexes.length, total: visibleIndexes.length }
     };
   }
 
   edgeColorsForIndexes(indexes, settings) {
     const graph = this.state.graph;
+    const bg = hexToColor(getEl('backgroundColor').value);
+    const focus = this.getFocusSet();
     return indexes.map((edgeIndex) => {
       const edge = graph.edges[edgeIndex];
-      if (settings.edgeColorMode === 'source') return this.state.nodeColors[edge.sourceIndex] || hexToColor(settings.edgeSingleColor);
-      return hexToColor(settings.edgeSingleColor);
+      let color = settings.edgeColorMode === 'source' ? (this.state.nodeColors[edge.sourceIndex] || hexToColor(settings.edgeSingleColor)) : hexToColor(settings.edgeSingleColor);
+      if (focus.size && !focus.has(edge.sourceIndex) && !focus.has(edge.targetIndex)) color = mixColors(color, bg, 0.76);
+      return color;
     });
   }
 
@@ -958,9 +1278,7 @@ export class App {
       const polylines = selectedEdges.map((edge) => [positions[edge.sourceIndex], positions[edge.targetIndex]]);
       this.edgeRenderer.drawPolylines({ polylines, colors, opacity: settings.edgeOpacity });
       this.state.edgeLayer = { kind: 'custom', edgeIndexes: selectedIndexes };
-      this.setStatus(selection.subset
-        ? `Straight edges drawn for ${selection.subset.drawn.toLocaleString()} of ${selection.subset.total.toLocaleString()} edges to keep rendering responsive.`
-        : 'Straight edges drawn.');
+      this.setStatus(selection.subset ? `Straight edges drawn for ${selection.subset.drawn.toLocaleString()} of ${selection.subset.total.toLocaleString()} visible edges.` : 'Straight edges drawn.');
       this.sceneController.render();
       return;
     }
@@ -978,9 +1296,7 @@ export class App {
         this.bundleWorker = null;
         this.edgeRenderer.drawPolylines({ polylines, colors, opacity: settings.edgeOpacity });
         this.state.edgeLayer = { kind: 'custom', edgeIndexes: selectedIndexes };
-        this.setStatus(selection.subset
-          ? `Bundled ${selection.subset.drawn.toLocaleString()} of ${selection.subset.total.toLocaleString()} edges to keep rendering responsive.`
-          : 'Edges drawn.');
+        this.setStatus(selection.subset ? `Bundled ${selection.subset.drawn.toLocaleString()} of ${selection.subset.total.toLocaleString()} visible edges.` : 'Edges drawn.');
         this.sceneController.render();
       }
     };
@@ -1008,26 +1324,29 @@ export class App {
     });
   }
 
-  handleSceneClick(event) {
-    if (!this.nodeRenderer.mesh || !this.state.graph) return;
+  normalizedPointerFromEvent(event) {
     const rect = this.dom.canvas.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    return rect;
+  }
+
+  pickNodeIndexFromEvent(event) {
+    if (!this.nodeRenderer.mesh || !this.state.graph) return -1;
+    const rect = this.normalizedPointerFromEvent(event);
     this.raycaster.setFromCamera(this.pointer, this.sceneController.camera);
     this.nodeRenderer.mesh.updateMatrixWorld(true);
     const hits = this.raycaster.intersectObject(this.nodeRenderer.mesh, false);
     const hit = hits.find((item) => Number.isInteger(item.instanceId) || Number.isInteger(item.index));
     const directIndex = Number.isInteger(hit?.instanceId) ? hit.instanceId : hit?.index;
-    if (Number.isInteger(directIndex)) {
-      this.showSelectedNode(directIndex);
-      return;
-    }
+    if (Number.isInteger(directIndex) && this.state.visibleMask[directIndex]) return directIndex;
 
     const positions = this.currentPositions();
     let bestIndex = -1;
     let bestDist2 = Infinity;
     const cameraPos = this.sceneController.camera.position;
     for (let i = 0; i < positions.length; i += 1) {
+      if (this.state.visibleMask?.length && !this.state.visibleMask[i]) continue;
       const pos = positions[i];
       const world = new THREE.Vector3(pos.x, pos.y, pos.z || 0);
       const projected = world.clone().project(this.sceneController.camera);
@@ -1045,9 +1364,142 @@ export class App {
         bestIndex = i;
       }
     }
+    return (bestIndex >= 0 && bestDist2 <= (54 * 54)) ? bestIndex : -1;
+  }
 
-    if (bestIndex >= 0 && bestDist2 <= (54 * 54)) this.showSelectedNode(bestIndex);
+  handlePointerDown(event) {
+    const picked = this.pickNodeIndexFromEvent(event);
+    const canDrag = this.state.activeView === '2d' && getEl('dragEditMode').checked;
+    if (canDrag && picked >= 0) {
+      const current = this.state.positions2D[picked];
+      if (!current) return;
+      this.normalizedPointerFromEvent(event);
+      this.raycaster.setFromCamera(this.pointer, this.sceneController.camera);
+      this.dragPlane.constant = -(current.z || 0);
+      this.raycaster.ray.intersectPlane(this.dragPlane, this.dragHit);
+      this.state.dragState = {
+        nodeIndex: picked,
+        offsetX: current.x - this.dragHit.x,
+        offsetY: current.y - this.dragHit.y,
+        moved: false
+      };
+      this.sceneController.controls.enabled = false;
+      event.preventDefault();
+      return;
+    }
+    this.state.dragState = { pointerOnly: true, moved: false, x: event.clientX, y: event.clientY };
+  }
+
+  handlePointerMove(event) {
+    if (this.state.dragState && !this.state.dragState.pointerOnly) {
+      this.normalizedPointerFromEvent(event);
+      this.raycaster.setFromCamera(this.pointer, this.sceneController.camera);
+      if (this.raycaster.ray.intersectPlane(this.dragPlane, this.dragHit)) {
+        const index = this.state.dragState.nodeIndex;
+        const newPos = {
+          x: this.dragHit.x + this.state.dragState.offsetX,
+          y: this.dragHit.y + this.state.dragState.offsetY,
+          z: 0
+        };
+        this.state.positions2D[index] = newPos;
+        const scaleX = Number(getEl('scaleX').value) || 1;
+        const scaleY = Number(getEl('scaleY').value) || 1;
+        this.state.base2DPositions[index] = { x: newPos.x / scaleX, y: newPos.y / scaleY };
+        this.state.pinnedBasePositions[index] = { ...this.state.base2DPositions[index] };
+        this.state.pinnedNodes.add(index);
+        if (this.state.positions3D[index]) {
+          this.state.positions3D[index].x = newPos.x;
+          this.state.positions3D[index].y = newPos.y;
+        }
+        this.state.dragState.moved = true;
+        this.renderCurrentView(true);
+        this.setStatus(`Dragging node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id} (pinned).`);
+      }
+      return;
+    }
+
+    const idx = this.pickNodeIndexFromEvent(event);
+    this.state.hoverPosition = { x: event.clientX, y: event.clientY };
+    this.setHoveredNode(idx >= 0 ? idx : null);
+  }
+
+  handlePointerUp(event) {
+    if (this.state.dragState && !this.state.dragState.pointerOnly) {
+      const idx = this.state.dragState.nodeIndex;
+      this.sceneController.controls.enabled = true;
+      this.state.dragState = null;
+      this.suppressClick = true;
+      this.showSelectedNode(idx);
+      this.setStatus(`Pinned node ${this.state.graph.nodes[idx].label || this.state.graph.nodes[idx].id}.`);
+      return;
+    }
+    this.sceneController.controls.enabled = true;
+    this.state.dragState = null;
+  }
+
+  setHoveredNode(index) {
+    const next = index == null ? null : Number(index);
+    if (this.state.hoveredNodeIndex === next) {
+      if (next != null && next >= 0) this.showTooltip(next, this.state.hoverPosition.x, this.state.hoverPosition.y);
+      return;
+    }
+    this.state.hoveredNodeIndex = next;
+    if (next == null || next < 0) {
+      this.hideTooltip();
+      this.renderCurrentView(false);
+      return;
+    }
+    this.showTooltip(next, this.state.hoverPosition.x, this.state.hoverPosition.y);
+    this.renderCurrentView(false);
+  }
+
+  showTooltip(index, clientX, clientY) {
+    const graph = this.state.graph;
+    if (!graph || index == null || index < 0) return;
+    const node = graph.nodes[index];
+    this.dom.tooltip.innerHTML = `<strong>${escapeHtml(node.label || node.id)}</strong><div>Degree: ${graph.metrics.degree[index]}</div>`;
+    this.dom.tooltip.classList.remove('hidden');
+    const rect = this.dom.canvas.getBoundingClientRect();
+    this.dom.tooltip.style.left = `${Math.max(8, clientX - rect.left + 14)}px`;
+    this.dom.tooltip.style.top = `${Math.max(8, clientY - rect.top + 14)}px`;
+  }
+
+  hideTooltip() {
+    this.dom.tooltip.classList.add('hidden');
+  }
+
+  handleSceneClick(event) {
+    if (!this.state.graph) return;
+    const picked = this.pickNodeIndexFromEvent(event);
+    if (picked >= 0) this.showSelectedNode(picked);
     else this.hideSelectedNode();
+  }
+
+  pinSelectedNode() {
+    const index = this.state.selectedNodeIndex;
+    if (index == null || index < 0 || !this.state.positions2D[index]) return;
+    const scaleX = Number(getEl('scaleX').value) || 1;
+    const scaleY = Number(getEl('scaleY').value) || 1;
+    this.state.pinnedNodes.add(index);
+    this.state.pinnedBasePositions[index] = { x: this.state.positions2D[index].x / scaleX, y: this.state.positions2D[index].y / scaleY };
+    this.setStatus(`Pinned node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}.`);
+    this.updateLegend();
+  }
+
+  unpinSelectedNode() {
+    const index = this.state.selectedNodeIndex;
+    if (index == null || index < 0) return;
+    this.state.pinnedNodes.delete(index);
+    this.state.pinnedBasePositions[index] = null;
+    this.setStatus(`Unpinned node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}.`);
+    this.updateLegend();
+  }
+
+  clearPins() {
+    this.state.pinnedNodes.clear();
+    this.state.pinnedBasePositions = new Array(this.state.graph?.nodes.length || 0).fill(null);
+    this.updateLegend();
+    this.setStatus('Cleared pinned nodes.');
   }
 
   showSelectedNode(index) {
@@ -1084,6 +1536,7 @@ export class App {
       </div>
     `;
     this.dom.nodeInfoPanel.classList.remove('hidden');
+    this.renderCurrentView(false);
     this.setStatus(`Selected node: ${node.label || node.id}`);
   }
 
@@ -1091,6 +1544,14 @@ export class App {
     this.state.selectedNodeIndex = null;
     this.dom.nodeInfoPanel.classList.add('hidden');
     this.dom.nodeInfoContent.innerHTML = '';
+    this.renderCurrentView(false);
+  }
+
+  exportScene() {
+    const format = getEl('exportFormat')?.value || 'png';
+    if (format === 'svg') return this.exportSvg();
+    if (format === 'pdf') return this.exportPdf();
+    return this.exportPng();
   }
 
   exportPng() {
@@ -1110,9 +1571,9 @@ export class App {
       height: Math.round(size.height * scale),
       background: getEl('backgroundColor').value,
       transparent,
-      positions,
-      sizes: this.state.nodeSizes,
-      nodeColors: this.state.nodeColors,
+      positions: positions.filter((_, i) => this.state.visibleMask[i]),
+      sizes: this.state.nodeSizes.filter((_, i) => this.state.visibleMask[i]),
+      nodeColors: this.state.nodeColors.filter((_, i) => this.state.visibleMask[i]),
       polylines: this.edgeRenderer.lastDraw.polylines,
       edgeColors: this.edgeRenderer.lastDraw.colors,
       edgeOpacity: this.edgeRenderer.lastDraw.opacity,
@@ -1140,6 +1601,7 @@ export class App {
     this.nodeRenderer.dispose();
     this.labelRenderer.clear();
     this.hideSelectedNode();
+    this.setHoveredNode(null);
     this.sceneController.fitToPositions([{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 80 }]);
     this.setStatus('Scene reset. Graph data is still loaded.');
   }
