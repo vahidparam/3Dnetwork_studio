@@ -67,6 +67,35 @@ code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 6px;
   margin-bottom: 14px;
 }
 .panel h2, .floating-panel h2 { margin: 0 0 12px; font-size: 16px; }
+.panel-head,
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.panel-head h2,
+.modal-head h2 { margin-bottom: 0; }
+.help-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  font-weight: 700;
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(96,165,250,0.22);
+  color: #dbeafe;
+}
+.help-btn:hover { background: rgba(59,130,246,0.2); }
+.small-help,
+.inline-help {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
 .field { display: grid; gap: 6px; margin-bottom: 10px; }
 .field > span { font-size: 13px; color: #c8d4f0; }
 .range-field strong { color: #ffffff; font-weight: 700; }
@@ -85,6 +114,36 @@ code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 6px;
 .warning-box { margin-top: 10px; }
 .subtle { opacity: 0.92; }
 .or-sep { text-align: center; color: #90a0c7; margin: 8px 0; }
+
+.section-card {
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  background: rgba(6, 12, 24, 0.36);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.section-card summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.section-card summary::-webkit-details-marker { display: none; }
+.section-card summary::after {
+  content: '▾';
+  color: #9fb3d9;
+  margin-left: auto;
+}
+.section-card[open] summary::after { content: '▴'; }
+.section-card .section-body {
+  padding: 0 12px 12px;
+}
 
 .file-input-row {
   display: grid;
@@ -106,36 +165,6 @@ code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 6px;
   background: rgba(239, 68, 68, 0.16);
   border-color: rgba(248, 113, 113, 0.35);
 }
-.pin-edit-box {
-  border: 1px solid rgba(96,165,250,0.18);
-  background: rgba(37,99,235,0.08);
-  border-radius: 12px;
-  padding: 10px;
-  margin-bottom: 12px;
-}
-.filter-values {
-  max-height: 160px;
-  overflow: auto;
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 12px;
-  padding: 8px;
-  background: rgba(7, 12, 23, 0.6);
-  margin-bottom: 10px;
-}
-.filter-value-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 4px;
-  font-size: 12px;
-  color: #d7e1fb;
-}
-.filter-value-item + .filter-value-item {
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-.filter-value-item label { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.filter-value-item .count { color: #8fa2cb; font-variant-numeric: tabular-nums; }
 #viewportWrap { position: relative; min-width: 0; }
 #viewport { display: block; width: 100%; height: 100vh; }
 #labelsLayer {
@@ -167,7 +196,29 @@ progress { width: 100%; }
   background: rgba(10, 16, 30, 0.84); box-shadow: 0 10px 30px rgba(0,0,0,0.26);
 }
 #floatingViewPanel {
-  right: 14px; bottom: 74px; width: min(220px, calc(100vw - 28px)); padding: 10px;
+  right: 14px; bottom: 74px; width: min(220px, calc(100vw - 28px)); padding: 8px;
+}
+.top-help-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 22;
+  min-width: 78px;
+  backdrop-filter: blur(10px);
+  background: rgba(10, 16, 30, 0.88);
+}
+.view-section {
+  margin-bottom: 8px;
+}
+.view-section:last-of-type {
+  margin-bottom: 0;
+}
+.view-section .section-body {
+  padding-top: 8px;
+}
+.compact-ramp-labels {
+  margin-top: -2px;
+  margin-bottom: 8px;
 }
 #floatingViewPanel.is-hidden { display: none; }
 .floating-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
@@ -181,7 +232,10 @@ progress { width: 100%; }
 .compact-check { margin-bottom: 6px; }
 .compact-actions { margin-top: 8px; }
 #legendPanel {
-  left: 14px; bottom: 74px; width: min(240px, calc(100vw - 28px));
+  left: 14px;
+  top: 14px;
+  bottom: auto;
+  width: min(220px, calc(100vw - 28px));
 }
 .legend-panel.hidden { display: none !important; }
 .legend-section + .legend-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); }
@@ -222,26 +276,43 @@ progress { width: 100%; }
   box-shadow: 0 10px 24px rgba(0,0,0,0.25); backdrop-filter: blur(8px);
 }
 .tooltip strong { display: block; margin-bottom: 2px; }
-@media (max-width: 1100px) {
-  #appShell { grid-template-columns: 1fr; }
-  #sidebar { max-height: 44vh; }
-  #viewport { height: 56vh; }
-}
 
-#floatingViewPanel {
-  width: min(180px, calc(100vw - 28px));
-  padding: 8px;
+.modal {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 9, 19, 0.58);
+  backdrop-filter: blur(6px);
 }
-#floatingViewPanel .grid2 {
-  grid-template-columns: 1fr;
-  gap: 6px;
+.modal-card {
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(72vh, 680px);
+  overflow: auto;
+  background: rgba(12,18,33,0.96);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.35);
 }
-#floatingViewPanel .field,
-#floatingViewPanel .checkbox {
-  margin-bottom: 6px;
-}
-#floatingViewPanel .floating-panel-head h2 {
+.modal-body {
   font-size: 14px;
+  line-height: 1.55;
+  color: #dbe5fb;
+}
+.modal-body h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #eff6ff;
+}
+.modal-body p { margin: 0 0 10px; }
+.modal-body ul { margin: 0 0 10px 18px; padding: 0; }
+.help-field span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .compact-field > span {
   font-size: 12px;
@@ -256,9 +327,9 @@ progress { width: 100%; }
   flex: 1 1 auto;
   width: 100%;
 }
-#legendPanel {
-  left: 14px;
-  top: 14px;
-  bottom: auto;
-  width: min(220px, calc(100vw - 28px));
+
+@media (max-width: 1100px) {
+  #appShell { grid-template-columns: 1fr; }
+  #sidebar { max-height: 44vh; }
+  #viewport { height: 56vh; }
 }

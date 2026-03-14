@@ -33,7 +33,11 @@
       </nav>
 
       <section class="panel stage-panel" data-stage="1">
-        <h2>Data Input</h2>
+        <div class="panel-head">
+          <h2>Data Input</h2>
+          <button type="button" class="help-btn" data-help-key="input">?</button>
+        </div>
+
         <label class="field">
           <span>GEXF file</span>
           <div class="file-input-row">
@@ -66,144 +70,153 @@
       </section>
 
       <section class="panel stage-panel hidden" data-stage="2">
-        <h2>2D Layout</h2>
-
-        <div class="grid2">
-          <label class="field">
-            <span>Position source</span>
-            <select id="positionSource">
-              <option value="existing">Existing positions</option>
-              <option value="random">Random</option>
-              <option value="circular">Circular</option>
-              <option value="grid">Grid</option>
-              <option value="forceatlas2">ForceAtlas2</option>
-              <option value="radial">Radial by degree</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Iterations</span>
-            <input id="layoutIterations" type="number" min="10" max="3000" step="10" value="250" />
-          </label>
+        <div class="panel-head">
+          <h2>2D Layout</h2>
+          <button type="button" class="help-btn" data-help-key="layout2d">?</button>
         </div>
 
-        <div class="grid2">
-          <label class="field range-field">
-            <span>2D scale X <strong id="scaleXValue">1.0</strong></span>
-            <input id="scaleX" type="range" min="0.1" max="20" step="0.1" value="1" />
-          </label>
-          <label class="field range-field">
-            <span>2D scale Y <strong id="scaleYValue">1.0</strong></span>
-            <input id="scaleY" type="range" min="0.1" max="20" step="0.1" value="1" />
-          </label>
-        </div>
+        <details class="section-card" open>
+          <summary>
+            <span>Layout engine</span>
+            <button type="button" class="help-btn small-help" data-help-key="layout2d">?</button>
+          </summary>
+          <div class="section-body">
+            <div class="grid2">
+              <label class="field">
+                <span>Position source</span>
+                <select id="positionSource">
+                  <option value="existing">Existing positions</option>
+                  <option value="random">Random</option>
+                  <option value="circular">Circular</option>
+                  <option value="grid">Grid</option>
+                  <option value="forceatlas2">ForceAtlas2</option>
+                  <option value="radial">Radial by degree</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Iterations</span>
+                <input id="layoutIterations" type="number" min="10" max="3000" step="10" value="250" />
+              </label>
+            </div>
 
-        <div class="grid2">
-          <label class="field range-field">
-            <span>Gravity <strong id="layoutGravityValue">0.30</strong></span>
-            <input id="layoutGravity" type="range" min="0" max="10" step="0.05" value="0.3" />
-          </label>
-          <label class="field range-field">
-            <span>Repulsion / scaling <strong id="layoutRepulsionValue">6.0</strong></span>
-            <input id="layoutRepulsion" type="range" min="0.1" max="60" step="0.1" value="6" />
-          </label>
-        </div>
+            <div class="grid2">
+              <label class="field range-field">
+                <span>2D scale X <strong id="scaleXValue">1.0</strong></span>
+                <input id="scaleX" type="range" min="0.1" max="20" step="0.1" value="1" />
+              </label>
+              <label class="field range-field">
+                <span>2D scale Y <strong id="scaleYValue">1.0</strong></span>
+                <input id="scaleY" type="range" min="0.1" max="20" step="0.1" value="1" />
+              </label>
+            </div>
 
-        <div class="grid2">
-          <label class="checkbox">
-            <input id="fa2BarnesHut" type="checkbox" checked />
-            <span>ForceAtlas2 Barnes-Hut</span>
-          </label>
-          <label class="checkbox">
-            <input id="fa2AdjustSizes" type="checkbox" checked />
-            <span>Prevent node overlap</span>
-          </label>
-        </div>
+            <div class="grid2">
+              <label class="field range-field">
+                <span>Gravity <strong id="layoutGravityValue">0.30</strong></span>
+                <input id="layoutGravity" type="range" min="0" max="10" step="0.05" value="0.3" />
+              </label>
+              <label class="field range-field">
+                <span>Repulsion / scaling <strong id="layoutRepulsionValue">6.0</strong></span>
+                <input id="layoutRepulsion" type="range" min="0.1" max="60" step="0.1" value="6" />
+              </label>
+            </div>
 
-        <div class="grid2">
-          <label class="checkbox">
-            <input id="fa2Outbound" type="checkbox" checked />
-            <span>Outbound attraction distribution</span>
-          </label>
-          <label class="checkbox">
-            <input id="fa2LinLog" type="checkbox" />
-            <span>LinLog mode</span>
-          </label>
-        </div>
+            <div class="grid2">
+              <label class="checkbox">
+                <input id="fa2BarnesHut" type="checkbox" checked />
+                <span>ForceAtlas2 Barnes-Hut</span>
+              </label>
+              <label class="checkbox">
+                <input id="fa2AdjustSizes" type="checkbox" checked />
+                <span>Prevent node overlap</span>
+              </label>
+            </div>
 
-        <div class="pin-edit-box">
-          <div class="grid2">
-            <label class="checkbox">
-              <input id="dragEditMode" type="checkbox" checked />
-              <span>2D drag edit mode</span>
-            </label>
-            <label class="checkbox">
-              <input id="showLegend" type="checkbox" checked />
-              <span>Show legend</span>
-            </label>
+            <div class="grid2">
+              <label class="checkbox">
+                <input id="fa2Outbound" type="checkbox" checked />
+                <span>Outbound attraction distribution</span>
+              </label>
+              <label class="checkbox">
+                <input id="fa2LinLog" type="checkbox" />
+                <span>LinLog mode</span>
+              </label>
+            </div>
+
+            <div class="hint subtle">
+              Drag editing and the legend are enabled by default. Hold <strong>Ctrl</strong> on Windows/Linux or <strong>⌘</strong> on macOS while clicking to select a node.
+            </div>
           </div>
-          <div class="hint subtle">Drag nodes directly in the viewport while 2D edit mode is enabled.</div>
-        </div>
+        </details>
 
-        <div class="grid2">
-          <label class="field">
-            <span>Node size mode</span>
-            <select id="nodeSizeMode">
-              <option value="constant">Constant</option>
-              <option value="degree">Degree</option>
-              <option value="weightedDegree">Weighted degree</option>
-              <option value="attribute">Attribute</option>
-              <option value="original">Original size</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Size attribute</span>
-            <select id="nodeSizeAttribute"></select>
-          </label>
-        </div>
+        <details class="section-card">
+          <summary>
+            <span>Node appearance</span>
+            <button type="button" class="help-btn small-help" data-help-key="appearance2d">?</button>
+          </summary>
+          <div class="section-body">
+            <div class="grid2">
+              <label class="field">
+                <span>Node size mode</span>
+                <select id="nodeSizeMode">
+                  <option value="constant">Constant</option>
+                  <option value="degree">Degree</option>
+                  <option value="weightedDegree">Weighted degree</option>
+                  <option value="attribute">Attribute</option>
+                  <option value="original">Original size</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Size attribute</span>
+                <select id="nodeSizeAttribute"></select>
+              </label>
+            </div>
 
-        <div class="grid2">
-          <label class="field">
-            <span>Size min</span>
-            <input id="nodeSizeMin" type="number" min="0.1" max="100" step="0.1" value="0.8" />
-          </label>
-          <label class="field">
-            <span>Size max</span>
-            <input id="nodeSizeMax" type="number" min="0.1" max="100" step="0.1" value="5" />
-          </label>
-        </div>
+            <div class="grid2">
+              <label class="field">
+                <span>Size min</span>
+                <input id="nodeSizeMin" type="number" min="0.1" max="100" step="0.1" value="0.8" />
+              </label>
+              <label class="field">
+                <span>Size max</span>
+                <input id="nodeSizeMax" type="number" min="0.1" max="100" step="0.1" value="5" />
+              </label>
+            </div>
 
-        <label class="field range-field">
-          <span>Node size scale <strong id="nodeSizeScaleValue">1.00</strong></span>
-          <input id="nodeSizeScale" type="range" min="0.1" max="8" step="0.05" value="1" />
-        </label>
+            <label class="field range-field">
+              <span>Node size scale <strong id="nodeSizeScaleValue">1.00</strong></span>
+              <input id="nodeSizeScale" type="range" min="0.1" max="8" step="0.05" value="1" />
+            </label>
 
-        <div class="grid2">
-          <label class="field">
-            <span>Node color mode</span>
-            <select id="nodeColorMode">
-              <option value="single">Single</option>
-              <option value="attribute">By attribute</option>
-              <option value="original">Original color</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Color attribute</span>
-            <select id="nodeColorAttribute"></select>
-          </label>
-        </div>
+            <div class="grid2">
+              <label class="field">
+                <span>Node color mode</span>
+                <select id="nodeColorMode">
+                  <option value="single">Single</option>
+                  <option value="attribute">By attribute</option>
+                  <option value="original">Original color</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Color attribute</span>
+                <select id="nodeColorAttribute"></select>
+              </label>
+            </div>
 
-        <div class="grid2">
-          <label class="field">
-            <span>Single color</span>
-            <input id="nodeSingleColor" type="color" value="#6fb1ff" />
-          </label>
-          <label class="field">
-            <span>Numeric ramp end</span>
-            <input id="nodeRampColor" type="color" value="#ff8b5f" />
-          </label>
-        </div>
+            <div class="grid2">
+              <label class="field">
+                <span>Single color</span>
+                <input id="nodeSingleColor" type="color" value="#6fb1ff" />
+              </label>
+              <label class="field">
+                <span>Numeric ramp end</span>
+                <input id="nodeRampColor" type="color" value="#ff8b5f" />
+              </label>
+            </div>
 
-        <div class="hint subtle" id="nodeColorHint">Attribute coloring auto-detects numeric ramps, literal color strings, or categorical palettes.</div>
+            <div class="hint subtle" id="nodeColorHint">Attribute coloring auto-detects numeric ramps, literal color strings, or categorical palettes.</div>
+          </div>
+        </details>
 
         <div class="actions">
           <button id="apply2DBtn">Apply 2D</button>
@@ -212,44 +225,55 @@
       </section>
 
       <section class="panel stage-panel hidden" data-stage="3">
-        <h2>3D Mapping</h2>
-
-        <div class="grid2">
-          <label class="field">
-            <span>Z strategy</span>
-            <select id="zMode">
-              <option value="flat">Flat (z = 0)</option>
-              <option value="original">Original z</option>
-              <option value="random">Random</option>
-              <option value="degree">Degree</option>
-              <option value="weightedDegree">Weighted degree</option>
-              <option value="attribute">Attribute</option>
-              <option value="globe">Globe (sphere)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Z attribute</span>
-            <select id="zAttribute"></select>
-          </label>
+        <div class="panel-head">
+          <h2>3D Mapping</h2>
+          <button type="button" class="help-btn" data-help-key="mapping3d">?</button>
         </div>
 
-        <div class="grid2">
-          <label class="field range-field">
-            <span>Z scale <strong id="zScaleValue">5.0</strong></span>
-            <input id="zScale" type="range" min="0" max="20" step="0.1" value="5" />
-          </label>
-          <label class="field range-field">
-            <span>Z jitter <strong id="zJitterValue">0.0</strong></span>
-            <input id="zJitter" type="range" min="0" max="5" step="0.05" value="0" />
-          </label>
-        </div>
+        <details class="section-card" open>
+          <summary>
+            <span>Depth strategy</span>
+            <button type="button" class="help-btn small-help" data-help-key="mapping3d">?</button>
+          </summary>
+          <div class="section-body">
+            <div class="grid2">
+              <label class="field">
+                <span>Z strategy</span>
+                <select id="zMode">
+                  <option value="flat">Flat (z = 0)</option>
+                  <option value="original">Original z</option>
+                  <option value="random">Random</option>
+                  <option value="degree">Degree</option>
+                  <option value="weightedDegree">Weighted degree</option>
+                  <option value="attribute">Attribute</option>
+                  <option value="globe">Globe (sphere)</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Z attribute</span>
+                <select id="zAttribute"></select>
+              </label>
+            </div>
 
-        <label class="field range-field">
-          <span>Category layer gap <strong id="zCategoryGapValue">8.0</strong></span>
-          <input id="zCategoryGap" type="range" min="0.5" max="30" step="0.1" value="8" />
-        </label>
+            <div class="grid2">
+              <label class="field range-field">
+                <span>Z scale <strong id="zScaleValue">5.0</strong></span>
+                <input id="zScale" type="range" min="0" max="20" step="0.1" value="5" />
+              </label>
+              <label class="field range-field">
+                <span>Z jitter <strong id="zJitterValue">0.0</strong></span>
+                <input id="zJitter" type="range" min="0" max="5" step="0.05" value="0" />
+              </label>
+            </div>
 
-        <div class="hint subtle" id="zHint">Attribute mode auto-detects numeric values or categorical groups and maps both into depth. Globe maps the current 2D layout onto a sphere.</div>
+            <label class="field range-field">
+              <span>Category layer gap <strong id="zCategoryGapValue">8.0</strong></span>
+              <input id="zCategoryGap" type="range" min="0.5" max="30" step="0.1" value="8" />
+            </label>
+
+            <div class="hint subtle" id="zHint">Attribute mode auto-detects numeric values or categorical groups and maps both into depth. Globe maps the current 2D layout onto a sphere.</div>
+          </div>
+        </details>
 
         <div class="actions">
           <button id="backTo2DBtn" class="ghost">Back to 2D</button>
@@ -259,77 +283,88 @@
       </section>
 
       <section class="panel stage-panel hidden" data-stage="4">
-        <h2>Edge Bundling</h2>
-
-        <div class="grid2">
-          <label class="field">
-            <span>Edge mode</span>
-            <select id="edgeMode">
-              <option value="straight">Straight</option>
-              <option value="arc">Arc</option>
-              <option value="hub">Hub bundle</option>
-              <option value="legacy">Shortest-path legacy</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Edge color mode</span>
-            <select id="edgeColorMode">
-              <option value="single">Single</option>
-              <option value="source">From source node</option>
-            </select>
-          </label>
+        <div class="panel-head">
+          <h2>Edge Bundling</h2>
+          <button type="button" class="help-btn" data-help-key="bundling">?</button>
         </div>
 
-        <div class="grid2">
-          <label class="field">
-            <span>Single edge color</span>
-            <input id="edgeSingleColor" type="color" value="#9aa5b1" />
-          </label>
-          <label class="field range-field">
-            <span>Edge opacity <strong id="edgeOpacityValue">0.18</strong></span>
-            <input id="edgeOpacity" type="range" min="0.01" max="1" step="0.01" value="0.18" />
-          </label>
-        </div>
+        <details class="section-card" open>
+          <summary>
+            <span>Edge drawing</span>
+            <button type="button" class="help-btn small-help" data-help-key="bundling">?</button>
+          </summary>
+          <div class="section-body">
+            <div class="grid2">
+              <label class="field">
+                <span>Edge mode</span>
+                <select id="edgeMode">
+                  <option value="straight">Straight</option>
+                  <option value="arc">Arc</option>
+                  <option value="hub">Hub bundle</option>
+                  <option value="legacy">Shortest-path legacy</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Edge color mode</span>
+                <select id="edgeColorMode">
+                  <option value="single">Single</option>
+                  <option value="source">From source node</option>
+                </select>
+              </label>
+            </div>
 
-        <div id="edgeTuningInfo" class="info-box"></div>
+            <div class="grid2">
+              <label class="field">
+                <span>Single edge color</span>
+                <input id="edgeSingleColor" type="color" value="#9aa5b1" />
+              </label>
+              <label class="field range-field">
+                <span>Edge opacity <strong id="edgeOpacityValue">0.18</strong></span>
+                <input id="edgeOpacity" type="range" min="0.01" max="1" step="0.01" value="0.18" />
+              </label>
+            </div>
 
-        <div class="bundle-group" data-mode="arc legacy hub">
-          <label class="field">
-            <span>Curve samples</span>
-            <input id="bundleSamples" type="number" min="3" max="64" step="1" value="8" />
-          </label>
-        </div>
+            <div id="edgeTuningInfo" class="info-box"></div>
 
-        <div class="grid2 bundle-group" data-mode="arc hub">
-          <label class="field range-field">
-            <span>Lift <strong id="bundleLiftValue">1.6</strong></span>
-            <input id="bundleLift" type="range" min="0" max="10" step="0.1" value="1.6" />
-          </label>
-          <label class="field">
-            <span>Hub count</span>
-            <input id="bundleHubCount" type="number" min="2" max="256" step="1" value="12" />
-          </label>
-        </div>
+            <div class="bundle-group" data-mode="arc legacy hub">
+              <label class="field">
+                <span>Curve samples</span>
+                <input id="bundleSamples" type="number" min="3" max="64" step="1" value="8" />
+              </label>
+            </div>
 
-        <div class="grid2 bundle-group" data-mode="legacy">
-          <label class="field range-field">
-            <span>Path exponent <strong id="legacyExponentValue">2.6</strong></span>
-            <input id="legacyExponent" type="range" min="1" max="6" step="0.1" value="2.6" />
-          </label>
-          <label class="field range-field">
-            <span>Detour cap <strong id="bundleDetourValue">3.5</strong></span>
-            <input id="bundleDetour" type="range" min="1" max="10" step="0.1" value="3.5" />
-          </label>
-        </div>
+            <div class="grid2 bundle-group" data-mode="arc hub">
+              <label class="field range-field">
+                <span>Lift <strong id="bundleLiftValue">1.6</strong></span>
+                <input id="bundleLift" type="range" min="0" max="10" step="0.1" value="1.6" />
+              </label>
+              <label class="field">
+                <span>Hub count</span>
+                <input id="bundleHubCount" type="number" min="2" max="256" step="1" value="12" />
+              </label>
+            </div>
 
-        <label class="checkbox bundle-group" data-mode="legacy">
-          <input id="legacyExcludeDirect" type="checkbox" checked />
-          <span>Exclude the original edge while searching for an alternate route</span>
-        </label>
+            <div class="grid2 bundle-group" data-mode="legacy">
+              <label class="field range-field">
+                <span>Path exponent <strong id="legacyExponentValue">2.6</strong></span>
+                <input id="legacyExponent" type="range" min="1" max="6" step="0.1" value="2.6" />
+              </label>
+              <label class="field range-field">
+                <span>Detour cap <strong id="bundleDetourValue">3.5</strong></span>
+                <input id="bundleDetour" type="range" min="1" max="10" step="0.1" value="3.5" />
+              </label>
+            </div>
 
-        <div class="warning-box">
-          Large graphs automatically use a representative edge subset in curved modes to keep the browser responsive. Increase point budget only if your machine can handle it.
-        </div>
+            <label class="checkbox bundle-group" data-mode="legacy">
+              <input id="legacyExcludeDirect" type="checkbox" checked />
+              <span>Exclude the original edge while searching for an alternate route</span>
+            </label>
+
+            <div class="warning-box">
+              Large graphs automatically use a representative edge subset in curved modes to keep the browser responsive. Increase point budget only if your machine can handle it.
+            </div>
+          </div>
+        </details>
 
         <div class="actions">
           <button id="backTo3DBtn" class="ghost">Back to 3D</button>
@@ -337,8 +372,6 @@
           <button id="clearEdgesBtn" class="ghost">Clear edges</button>
         </div>
       </section>
-
-      
     </aside>
 
     <main id="viewportWrap">
@@ -346,78 +379,115 @@
       <div id="labelsLayer"></div>
       <div id="tooltip" class="tooltip hidden"></div>
 
+      <button id="openOverallHelpBtn" class="top-help-btn" type="button" data-help-key="overall" title="Open help">Help</button>
+
       <section id="floatingViewPanel" class="floating-panel">
         <div class="floating-panel-head">
           <h2>View</h2>
           <button id="hideViewPanelBtn" class="ghost small" type="button">Hide</button>
         </div>
 
-        <div class="grid2 compact-grid">
-          <label class="field">
-            <span>Background</span>
-            <input id="backgroundColor" type="color" value="#0f1320" />
-          </label>
-          <label class="field">
-            <span>Node detail</span>
-            <select id="nodeDetail">
-              <option value="6">Low</option>
-              <option value="10" selected>Medium</option>
-              <option value="16">High</option>
-            </select>
-          </label>
-        </div>
+        <details class="section-card view-section" open>
+          <summary>
+            <span>Scene options</span>
+          </summary>
+          <div class="section-body">
+            <div class="grid2 compact-grid">
+              <label class="field">
+                <span>Background</span>
+                <input id="backgroundColor" type="color" value="#0f1320" />
+              </label>
+              <label class="field">
+                <span>Node detail</span>
+                <select id="nodeDetail">
+                  <option value="6">Low</option>
+                  <option value="10" selected>Medium</option>
+                  <option value="16">High</option>
+                </select>
+              </label>
+            </div>
 
-        <div class="grid2 compact-grid">
-          <label class="checkbox compact-check">
-            <input type="checkbox" id="showLabels" />
-            <span>Labels</span>
-          </label>
-          <label class="field">
-            <span>Count</span>
-            <input id="labelCount" type="number" min="0" max="500" step="1" value="50" />
-          </label>
-        </div>
+            <div class="grid2 compact-grid">
+              <label class="checkbox compact-check">
+                <input type="checkbox" id="showLabels" checked />
+                <span>Labels</span>
+              </label>
+              <label class="field">
+                <span>Count</span>
+                <input id="labelCount" type="number" min="0" max="500" step="1" value="50" />
+              </label>
+            </div>
 
-        <div class="grid2 compact-grid">
-          <label class="field">
-            <span>Label size</span>
-            <input id="labelSize" type="number" min="8" max="28" step="1" value="12" />
-          </label>
-          <label class="field">
-            <span>Point budget</span>
-            <input id="pointBudget" type="number" min="2000" max="2000000" step="1000" value="300000" />
-          </label>
-        </div>
+            <label class="field compact-field">
+              <span>Label size</span>
+              <input id="labelSize" type="number" min="8" max="28" step="1" value="12" />
+            </label>
+          </div>
+        </details>
 
-        <label class="field compact-field">
-          <span>Export format</span>
-          <select id="exportFormat">
-            <option value="png" selected>PNG</option>
-            <option value="svg">SVG</option>
-            <option value="pdf">PDF</option>
-          </select>
-        </label>
+        <details class="section-card view-section" open>
+          <summary>
+            <span>Utilities</span>
+          </summary>
+          <div class="section-body">
+            <label class="field help-field compact-field">
+              <span>
+                Edge opacity
+                <button type="button" class="help-btn inline-help" data-help-key="edgeOpacity">?</button>
+              </span>
+              <input id="viewEdgeOpacity" type="range" min="0.01" max="1" step="0.01" value="0.18" />
+            </label>
+            <div class="ramp-labels compact-ramp-labels"><span>faint</span><span id="viewEdgeOpacityValue">0.18</span><span>strong</span></div>
 
-        <label class="field compact-field">
-          <span>Export scale</span>
-          <select id="exportScale">
-            <option value="1">1×</option>
-            <option value="2" selected>2×</option>
-            <option value="3">3×</option>
-            <option value="4">4×</option>
-          </select>
-        </label>
+            <label class="field help-field compact-field">
+              <span>
+                Point budget
+                <button type="button" class="help-btn inline-help" data-help-key="pointBudget">?</button>
+              </span>
+              <input id="pointBudget" type="number" min="2000" max="2000000" step="1000" value="300000" />
+            </label>
 
-        <label class="checkbox compact-check compact-stack">
-          <input id="transparentExport" type="checkbox" checked />
-          <span>Transparent export</span>
-        </label>
+            <div class="actions compact-actions compact-vertical-actions">
+              <button id="fitViewBtn">Fit</button>
+              <button id="resetSceneBtn" class="ghost">Reset</button>
+            </div>
+          </div>
+        </details>
 
-        <div class="actions compact-actions compact-vertical-actions">
-          <button id="fitViewBtn">Fit</button>
-          <button id="resetSceneBtn" class="ghost">Reset</button>
-          <button id="exportSceneBtn">Export</button>
-        </div>
+        <details class="section-card view-section">
+          <summary>
+            <span>Export</span>
+          </summary>
+          <div class="section-body">
+            <label class="field compact-field">
+              <span>Export format</span>
+              <select id="exportFormat">
+                <option value="png" selected>PNG</option>
+                <option value="svg">SVG</option>
+                <option value="pdf">PDF</option>
+              </select>
+            </label>
+
+            <label class="field compact-field">
+              <span>Export scale</span>
+              <select id="exportScale">
+                <option value="1">1×</option>
+                <option value="2" selected>2×</option>
+                <option value="3">3×</option>
+                <option value="4">4×</option>
+              </select>
+            </label>
+
+            <label class="checkbox compact-check compact-stack">
+              <input id="transparentExport" type="checkbox" checked />
+              <span>Transparent export</span>
+            </label>
+
+            <div class="actions compact-actions compact-vertical-actions">
+              <button id="exportSceneBtn">Export</button>
+            </div>
+          </div>
+        </details>
       </section>
 
       <button id="showViewPanelBtn" class="floating-toggle hidden" type="button">View</button>
@@ -445,9 +515,19 @@
           <div id="progressValue">0%</div>
         </div>
       </div>
+
+      <div id="helpModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+        <div class="modal-card">
+          <div class="modal-head">
+            <h2 id="helpModalTitle">Help</h2>
+            <button id="closeHelpModalBtn" class="ghost small" type="button">Close</button>
+          </div>
+          <div id="helpModalBody" class="modal-body"></div>
+        </div>
+      </div>
     </main>
   </div>
 
-  <script type="module" src="./src/main.js?v=20"></script>
+  <script type="module" src="./src/main.js?v=23"></script>
 </body>
 </html>

@@ -100,7 +100,8 @@ export class App {
       pinnedBasePositions: new Array(),
       visibleMask: [],
       dragState: null,
-      hoverPosition: { x: 0, y: 0 }
+      hoverPosition: { x: 0, y: 0 },
+      screenNodeCache: []
     };
     this.suppressClick = false;
 
@@ -119,12 +120,18 @@ export class App {
       showViewPanelBtn: getEl('showViewPanelBtn'),
       legendPanel: getEl('legendPanel'),
       legendContent: getEl('legendContent'),
-      tooltip: getEl('tooltip')
+      tooltip: getEl('tooltip'),
+      helpModal: getEl('helpModal'),
+      helpModalTitle: getEl('helpModalTitle'),
+      helpModalBody: getEl('helpModalBody')
     };
 
     this.sceneController = new SceneController({
       canvas: this.dom.canvas,
-      onRender: (camera) => this.projectLabels(camera)
+      onRender: (camera) => {
+        this.projectLabels(camera);
+        this.updateScreenNodeCache(camera);
+      }
     });
     this.nodeRenderer = new NodeRenderer(this.sceneController.scene);
     this.edgeRenderer = new EdgeRenderer(this.sceneController.scene);
@@ -132,7 +139,7 @@ export class App {
     this.layoutWorker = null;
     this.bundleWorker = null;
     this.raycaster = new THREE.Raycaster();
-    this.raycaster.params.Points.threshold = 12;
+    this.raycaster.params.Points.threshold = 18;
     this.pointer = new THREE.Vector2();
     this.dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
     this.dragHit = new THREE.Vector3();
@@ -143,6 +150,115 @@ export class App {
       arc: 'Arc mode adds a single lifted control point. Increase Lift for more separation; keep Samples moderate for performance.',
       hub: 'Hub bundle routes links through high-degree hubs. Increase Hub count when the graph has multiple communities; reduce it when the result becomes noisy.',
       legacy: 'Shortest-path legacy searches for an alternate route through the graph itself. Lower Path exponent prefers shorter local steps; lower Detour cap keeps routes tighter.'
+    };
+
+    this.helpContent = {
+      overall: {
+        title: 'Network3D Studio guide',
+        body: `
+          <h3>Recommended workflow</h3>
+          <p>Start in <strong>Input</strong>, refine the network in <strong>2D Layout</strong>, add depth in <strong>3D Mapping</strong>, then draw or bundle edges in <strong>Edge Bundling</strong>.</p>
+          <ul>
+            <li><strong>Selection:</strong> use <strong>Ctrl + click</strong> on Windows/Linux or <strong>⌘ + click</strong> on macOS.</li>
+            <li><strong>Drag editing:</strong> in 2D, drag nodes directly to reposition them. Those moved positions are preserved in later layout runs.</li>
+            <li><strong>View panel:</strong> use the right panel for scene controls, export, edge opacity, and reset actions.</li>
+            <li><strong>Performance:</strong> reduce point budget, edge opacity, or bundling samples when large graphs feel heavy.</li>
+          </ul>
+          <p>Use the small help buttons inside each section whenever you want tuning advice for a specific control group.</p>
+        `
+      },
+      input: {
+        title: 'Input formats',
+        body: `
+          <h3>Supported files</h3>
+          <p>Load either one GEXF file or a pair of CSV files for nodes and edges. Use GEXF when you want to preserve positions, sizes, colors, and extra attributes from Gephi or another network tool.</p>
+          <ul>
+            <li><strong>GEXF:</strong> best choice when the graph already contains layout, size, color, or metadata.</li>
+            <li><strong>Nodes CSV:</strong> should include <code>id</code>, and may include <code>label</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>size</code>, and <code>color</code>.</li>
+            <li><strong>Edges CSV:</strong> should include <code>source</code> and <code>target</code>, with optional <code>weight</code>.</li>
+          </ul>
+          <p>Use the × buttons to remove an uploaded file and clear the current scene before loading a different network.</p>
+        `
+      },
+      layout2d: {
+        title: '2D layout',
+        body: `
+          <h3>How to use this step</h3>
+          <p>Start by choosing a position source. <strong>Existing positions</strong> uses coordinates already stored in the file. <strong>ForceAtlas2</strong> recomputes the layout and is usually the best option for exploratory work.</p>
+          <ul>
+            <li><strong>Scale X / Y:</strong> stretch or compress the layout horizontally or vertically without rerunning the layout.</li>
+            <li><strong>Gravity:</strong> pulls disconnected pieces toward the center.</li>
+            <li><strong>Repulsion / scaling:</strong> pushes nodes apart. Increase it when hubs overlap too much.</li>
+            <li><strong>Barnes-Hut:</strong> speeds up ForceAtlas2 for large graphs.</li>
+            <li><strong>Prevent node overlap:</strong> keeps large nodes from sitting on top of one another.</li>
+          </ul>
+          <p>Drag editing is enabled by default. To select a node, hold <strong>Ctrl</strong> or <strong>⌘</strong> and click.</p>
+        `
+      },
+      appearance2d: {
+        title: 'Node appearance',
+        body: `
+          <h3>Size and color</h3>
+          <p>Use this section to map graph attributes into visible styling. Changes should appear immediately in 2D.</p>
+          <ul>
+            <li><strong>Node size mode:</strong> constant, degree-based, weighted degree, numeric attribute, or original imported size.</li>
+            <li><strong>Node color mode:</strong> one single color, by attribute, or original imported colors.</li>
+            <li><strong>Attribute color mode:</strong> automatically detects literal colors, numeric ramps, or categorical palettes.</li>
+          </ul>
+          <p>When a network has many edges, reduce edge opacity or move to the 3D step to inspect node colors more clearly.</p>
+        `
+      },
+      mapping3d: {
+        title: '3D mapping',
+        body: `
+          <h3>Depth strategies</h3>
+          <p>This step keeps your 2D layout and adds a third dimension. Numeric attributes become continuous depth. Categorical attributes become discrete layers.</p>
+          <ul>
+            <li><strong>Flat:</strong> keeps the graph in 2D.</li>
+            <li><strong>Degree / weighted degree:</strong> moves important nodes away from the plane.</li>
+            <li><strong>Attribute:</strong> works for both numeric and categorical fields.</li>
+            <li><strong>Globe:</strong> wraps the current 2D layout around a sphere.</li>
+          </ul>
+          <p><strong>Z scale</strong> controls the amount of depth. <strong>Z jitter</strong> adds slight separation to reduce overlap.</p>
+        `
+      },
+      bundling: {
+        title: 'Edge drawing and bundling',
+        body: `
+          <h3>Choosing a technique</h3>
+          <p>Use <strong>Straight</strong> for raw inspection and very large graphs. Curved modes improve readability but require more computation.</p>
+          <ul>
+            <li><strong>Arc:</strong> simple lifted curves.</li>
+            <li><strong>Hub bundle:</strong> routes many edges through hub nodes.</li>
+            <li><strong>Shortest-path legacy:</strong> tries to reuse the network topology itself for bundled routes.</li>
+          </ul>
+          <p>For large graphs, keep samples moderate and only increase the point budget when your machine stays responsive.</p>
+        `
+      },
+      pointBudget: {
+        title: 'Point budget',
+        body: `
+          <h3>What point budget means</h3>
+          <p>Point budget is a performance guardrail for edge rendering. Curved edges are drawn as many line segments. The point budget limits how much geometry is sent to the browser at once.</p>
+          <ul>
+            <li><strong>Lower values:</strong> faster previews and safer performance on large networks.</li>
+            <li><strong>Higher values:</strong> more edges and smoother curves, but heavier GPU and browser load.</li>
+          </ul>
+          <p>If the browser becomes slow, reduce point budget, curve samples, or opacity-heavy edge rendering.</p>
+        `
+      },
+      edgeOpacity: {
+        title: 'Edge opacity',
+        body: `
+          <h3>Controlling edge strength</h3>
+          <p>Edge opacity determines how strongly links dominate the scene. Lower opacity is better when you want to inspect node colors and structure without the edge layer washing over everything.</p>
+          <ul>
+            <li><strong>Low opacity:</strong> better for dense graphs and node inspection.</li>
+            <li><strong>Higher opacity:</strong> better for sparse graphs or when edge patterns are the main focus.</li>
+          </ul>
+          <p>Use this slider in the view panel for quick scene tuning without changing the bundling method itself.</p>
+        `
+      }
     };
 
     this.bindEvents();
@@ -184,7 +300,6 @@ export class App {
     getEl('showLabels').addEventListener('change', () => this.renderLabels());
     getEl('labelCount').addEventListener('input', () => this.renderLabels());
     getEl('labelSize').addEventListener('input', () => this.renderLabels());
-    getEl('showLegend').addEventListener('change', () => this.updateLegend());
 
     [
       'scaleX', 'scaleY', 'layoutGravity', 'layoutRepulsion',
@@ -211,7 +326,33 @@ export class App {
 
     ['edgeColorMode', 'edgeSingleColor', 'edgeOpacity'].forEach((id) => {
       const el = getEl(id);
-      el.addEventListener((el.type === 'range' || el.type === 'color') ? 'input' : 'change', () => this.redrawCurrentEdgeAppearance());
+      el.addEventListener((el.type === 'range' || el.type === 'color') ? 'input' : 'change', () => {
+        this.syncEdgeOpacityControls('stage');
+        this.redrawCurrentEdgeAppearance();
+      });
+    });
+
+    const viewEdgeOpacity = getEl('viewEdgeOpacity');
+    if (viewEdgeOpacity) {
+      viewEdgeOpacity.addEventListener('input', () => {
+        this.syncEdgeOpacityControls('view');
+        this.redrawCurrentEdgeAppearance();
+      });
+    }
+
+    [...document.querySelectorAll('[data-help-key]')].forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.showHelp(button.dataset.helpKey);
+      });
+    });
+    getEl('closeHelpModalBtn')?.addEventListener('click', () => this.hideHelp());
+    this.dom.helpModal?.addEventListener('click', (event) => {
+      if (event.target === this.dom.helpModal) this.hideHelp();
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.hideHelp();
     });
 
     getEl('fitViewBtn').addEventListener('click', () => this.sceneController.fitToPositions(this.visiblePositions()));
@@ -242,7 +383,6 @@ export class App {
     this.dom.canvas.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
     window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
     window.addEventListener('pointerup', (event) => this.handlePointerUp(event));
-    this.dom.canvas.addEventListener('dblclick', (event) => this.handleSceneClick(event));
     this.dom.canvas.addEventListener('click', (event) => {
       if (this.suppressClick) { this.suppressClick = false; return; }
       if (this.state.dragState && this.state.dragState.moved) return;
@@ -269,6 +409,7 @@ export class App {
       input.addEventListener('input', sync);
       sync();
     });
+    this.syncEdgeOpacityControls('stage');
   }
 
   setStatus(text) { this.dom.statusText.textContent = text; }
@@ -279,6 +420,52 @@ export class App {
     this.dom.statsText.textContent = graph
       ? `Nodes: ${graph.nodes.length.toLocaleString()} (${visibleCount.toLocaleString()} visible) · Edges: ${graph.edges.length.toLocaleString()}`
       : 'Nodes: 0 · Edges: 0';
+  }
+
+  isSelectionModifier(event) {
+    return !!(event?.ctrlKey || event?.metaKey);
+  }
+
+  isDragEditEnabled() {
+    const el = getEl('dragEditMode');
+    return el ? el.checked : true;
+  }
+
+  isLegendEnabled() {
+    const el = getEl('showLegend');
+    return el ? el.checked : true;
+  }
+
+  showHelp(key) {
+    const entry = this.helpContent[key];
+    if (!entry || !this.dom.helpModal) return;
+    this.dom.helpModalTitle.textContent = entry.title;
+    this.dom.helpModalBody.innerHTML = entry.body;
+    this.dom.helpModal.classList.remove('hidden');
+  }
+
+  hideHelp() {
+    this.dom.helpModal?.classList.add('hidden');
+  }
+
+  syncEdgeOpacityControls(source = 'stage') {
+    const stageInput = getEl('edgeOpacity');
+    const viewInput = getEl('viewEdgeOpacity');
+    const viewLabel = getEl('viewEdgeOpacityValue');
+    if (!stageInput || !viewInput) return;
+    if (source === 'view') stageInput.value = viewInput.value;
+    else viewInput.value = stageInput.value;
+    if (viewLabel) viewLabel.textContent = formatValue(stageInput.value, 2);
+  }
+
+  collapseStageSections(stage) {
+    const panel = document.querySelector(`.stage-panel[data-stage="${stage}"]`);
+    if (!panel) return;
+    const details = [...panel.querySelectorAll('details.section-card')];
+    if (!details.length) return;
+    details.forEach((detail, index) => {
+      detail.open = index === 0;
+    });
   }
 
   setViewPanelVisible(visible) {
@@ -324,6 +511,7 @@ export class App {
     this.state.pinnedNodes = new Set();
     this.state.pinnedBasePositions = [];
     this.state.visibleMask = [];
+    this.state.screenNodeCache = [];
     this.nodeRenderer.dispose();
     this.edgeRenderer.clear();
     this.labelRenderer.clear();
@@ -368,7 +556,7 @@ export class App {
   getAllPresetIds() {
     return [
       'positionSource', 'layoutIterations', 'scaleX', 'scaleY', 'layoutGravity', 'layoutRepulsion',
-      'fa2BarnesHut', 'fa2AdjustSizes', 'fa2Outbound', 'fa2LinLog', 'dragEditMode', 'showLegend',
+      'fa2BarnesHut', 'fa2AdjustSizes', 'fa2Outbound', 'fa2LinLog',
       'nodeSizeMode', 'nodeSizeAttribute', 'nodeSizeMin', 'nodeSizeMax', 'nodeSizeScale',
       'nodeColorMode', 'nodeColorAttribute', 'nodeSingleColor', 'nodeRampColor',
       'zMode', 'zAttribute', 'zScale', 'zJitter', 'zCategoryGap',
@@ -604,6 +792,7 @@ export class App {
 
       await this.run2D(false);
       this.updateStageUI(2);
+      this.collapseStageSections(2);
       this.hideProgress();
       this.setStatus('Graph loaded. Adjust the 2D layout.');
     } catch (error) {
@@ -1131,12 +1320,39 @@ export class App {
 
   projectLabels(camera) {
     const positions = this.currentPositions();
-    if (!positions.length) return;
+    if (!positions.length) {
+      this.state.screenNodeCache = [];
+      return;
+    }
     this.labelRenderer.project(positions, camera, this.dom.canvas.clientWidth, this.dom.canvas.clientHeight);
   }
 
+  updateScreenNodeCache(camera = this.sceneController.camera) {
+    const positions = this.currentPositions();
+    if (!positions.length) {
+      this.state.screenNodeCache = [];
+      return;
+    }
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    const rect = this.dom.canvas.getBoundingClientRect();
+    const width = rect.width || this.dom.canvas.clientWidth || 1;
+    const height = rect.height || this.dom.canvas.clientHeight || 1;
+    const temp = new THREE.Vector3();
+    this.state.screenNodeCache = positions.map((p, i) => {
+      temp.set(Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0).project(camera);
+      return {
+        x: (temp.x * 0.5 + 0.5) * width,
+        y: (-temp.y * 0.5 + 0.5) * height,
+        z: temp.z,
+        size: this.state.nodeSizes[i] || 1,
+        visible: !this.state.visibleMask?.length || !!this.state.visibleMask[i]
+      };
+    });
+  }
+
   updateLegend() {
-    const visible = getEl('showLegend').checked;
+    const visible = this.isLegendEnabled();
     this.dom.legendPanel.classList.toggle('hidden', !visible || !this.state.graph);
     if (!visible || !this.state.graph) return;
 
@@ -1332,45 +1548,57 @@ export class App {
   }
 
   pickNodeIndexFromEvent(event) {
-    if (!this.nodeRenderer.mesh || !this.state.graph) return -1;
+    if (!this.state.graph) return -1;
     const rect = this.normalizedPointerFromEvent(event);
-    this.raycaster.setFromCamera(this.pointer, this.sceneController.camera);
-    this.nodeRenderer.mesh.updateMatrixWorld(true);
-    const hits = this.raycaster.intersectObject(this.nodeRenderer.mesh, false);
-    const hit = hits.find((item) => Number.isInteger(item.instanceId) || Number.isInteger(item.index));
-    const directIndex = Number.isInteger(hit?.instanceId) ? hit.instanceId : hit?.index;
-    if (Number.isInteger(directIndex) && this.state.visibleMask[directIndex]) return directIndex;
+    const camera = this.sceneController.camera;
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
 
+    const cache = this.state.screenNodeCache?.length ? this.state.screenNodeCache : null;
     const positions = this.currentPositions();
     let bestIndex = -1;
     let bestDist2 = Infinity;
-    const cameraPos = this.sceneController.camera.position;
+
+    const temp = new THREE.Vector3();
     for (let i = 0; i < positions.length; i += 1) {
       if (this.state.visibleMask?.length && !this.state.visibleMask[i]) continue;
-      const pos = positions[i];
-      const world = new THREE.Vector3(pos.x, pos.y, pos.z || 0);
-      const projected = world.clone().project(this.sceneController.camera);
-      if (projected.z < -1 || projected.z > 1) continue;
-      const sx = (projected.x * 0.5 + 0.5) * rect.width;
-      const sy = (-projected.y * 0.5 + 0.5) * rect.height;
+      const entry = cache ? cache[i] : null;
+      let sx;
+      let sy;
+      let sz;
+      let renderedSize;
+
+      if (entry) {
+        sx = entry.x;
+        sy = entry.y;
+        sz = entry.z;
+        renderedSize = entry.size;
+      } else {
+        const p = positions[i] || { x: 0, y: 0, z: 0 };
+        temp.set(Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0).project(camera);
+        sx = (temp.x * 0.5 + 0.5) * rect.width;
+        sy = (-temp.y * 0.5 + 0.5) * rect.height;
+        sz = temp.z;
+        renderedSize = this.state.nodeSizes[i] || 1;
+      }
+
+      if (sz < -1 || sz > 1) continue;
       const dx = (event.clientX - rect.left) - sx;
       const dy = (event.clientY - rect.top) - sy;
       const d2 = dx * dx + dy * dy;
-      const worldDist = Math.max(1e-6, world.distanceTo(cameraPos));
-      const perspectiveBoost = Math.min(3.2, 240 / worldDist);
-      const pickRadius = Math.max(24, (this.state.nodeSizes[i] || 1) * 8 * perspectiveBoost);
+      const pickRadius = Math.max(12, renderedSize * 4.2 + 7);
       if (d2 <= pickRadius * pickRadius && d2 < bestDist2) {
         bestDist2 = d2;
         bestIndex = i;
       }
     }
-    return (bestIndex >= 0 && bestDist2 <= (54 * 54)) ? bestIndex : -1;
+    return bestIndex;
   }
 
   handlePointerDown(event) {
     const picked = this.pickNodeIndexFromEvent(event);
-    const canDrag = this.state.activeView === '2d' && getEl('dragEditMode').checked;
-    if (canDrag && picked >= 0) {
+    const canDrag = this.state.activeView === '2d' && this.isDragEditEnabled() && !this.isSelectionModifier(event);
+    if (canDrag && picked >= 0 && event.button === 0) {
       const current = this.state.positions2D[picked];
       if (!current) return;
       this.normalizedPointerFromEvent(event);
@@ -1413,9 +1641,14 @@ export class App {
         }
         this.state.dragState.moved = true;
         this.renderCurrentView(true);
-        this.setStatus(`Dragging node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id} (pinned).`);
+        this.setStatus(`Dragging node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}.`);
       }
       return;
+    }
+
+    if (this.state.dragState?.pointerOnly) {
+      const moved = Math.hypot((event.clientX - this.state.dragState.x), (event.clientY - this.state.dragState.y));
+      if (moved > 4) this.state.dragState.moved = true;
     }
 
     const idx = this.pickNodeIndexFromEvent(event);
@@ -1429,10 +1662,11 @@ export class App {
       this.sceneController.controls.enabled = true;
       this.state.dragState = null;
       this.suppressClick = true;
-      this.showSelectedNode(idx);
-      this.setStatus(`Pinned node ${this.state.graph.nodes[idx].label || this.state.graph.nodes[idx].id}.`);
+      this.renderCurrentView(false);
+      this.setStatus(`Moved node ${this.state.graph.nodes[idx].label || this.state.graph.nodes[idx].id}. Use Ctrl/⌘ + click to inspect it.`);
       return;
     }
+    if (this.state.dragState?.pointerOnly && this.state.dragState.moved) this.suppressClick = true;
     this.sceneController.controls.enabled = true;
     this.state.dragState = null;
   }
@@ -1469,7 +1703,7 @@ export class App {
   }
 
   handleSceneClick(event) {
-    if (!this.state.graph) return;
+    if (!this.state.graph || !this.isSelectionModifier(event)) return;
     const picked = this.pickNodeIndexFromEvent(event);
     if (picked >= 0) this.showSelectedNode(picked);
     else this.hideSelectedNode();
