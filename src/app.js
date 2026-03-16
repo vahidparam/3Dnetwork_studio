@@ -176,6 +176,8 @@ export class App {
             <li><strong>GEXF:</strong> best choice when the graph already contains layout, size, color, or metadata.</li>
             <li><strong>Nodes CSV:</strong> should include <code>id</code>, and may include <code>label</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>size</code>, and <code>color</code>.</li>
             <li><strong>Edges CSV:</strong> should include <code>source</code> and <code>target</code>, with optional <code>weight</code>.</li>
+            <li><strong>Header matching:</strong> CSV column names are case-insensitive, so capitalized Gephi exports like <code>ID</code>, <code>Source</code>, <code>Target</code>, <code>X</code>, and <code>Y</code> are accepted.</li>
+            <li><strong>Duplicate edges:</strong> repeated source-target rows are accepted. The layout engine merges them internally for ForceAtlas2 stability.</li>
           </ul>
           <p>Use the × buttons to remove an uploaded file and clear the current scene before loading a different network.</p>
         `
@@ -753,7 +755,7 @@ export class App {
     }
     try {
       this.showProgress('Loading graph…');
-      this.setStatus('Loading graph…');
+      this.setStatus(nodesCsvFile && edgesCsvFile ? 'Loading CSV graph…' : 'Loading graph…');
       const rawGraph = await loadGraphFromFiles({
         gexfFile,
         nodesCsvFile,
@@ -794,7 +796,7 @@ export class App {
       this.updateStageUI(2);
       this.collapseStageSections(2);
       this.hideProgress();
-      this.setStatus('Graph loaded. Adjust the 2D layout.');
+      this.setStatus(nodesCsvFile && edgesCsvFile ? 'CSV graph loaded. Adjust the 2D layout.' : 'Graph loaded. Adjust the 2D layout.');
     } catch (error) {
       console.error(error);
       this.hideProgress();

@@ -68,5 +68,3 @@ When a node is selected with **Ctrl/⌘ + click**, a details panel opens at the 
 - Keep 3D depth meaning consistent. Do not mix unrelated metrics into the same scene unless you explain them in the legend.
 - For publication-style exports, use transparent PNG or SVG.
 - If bundling becomes slow, reduce curve samples or point budget.
-
-

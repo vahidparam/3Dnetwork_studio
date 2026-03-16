@@ -1,51 +1,83 @@
 import { parseGexfFile } from './parsers/gexf.js';
 import { parseCsvFile } from './parsers/csv.js';
 
-function sanitizeNode(raw, fallbackIndex) {
-  const attrs = { ...(raw.attrs || {}) };
-  const reserved = new Set(['id', 'label', 'x', 'y', 'z', 'size', 'color']);
-  Object.entries(raw).forEach(([key, value]) => {
-    if (!reserved.has(key) && key !== 'attrs') attrs[key] = value;
+function normalizeFieldName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function findCanonicalValue(raw, aliases) {
+  const directMap = new Map(Object.entries(raw || {}).map(([key, value]) => [normalizeFieldName(key), value]));
+  for (const alias of aliases) {
+    const hit = directMap.get(normalizeFieldName(alias));
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+function buildAttrBag(raw, reservedAliases) {
+  const reserved = new Set(reservedAliases.map((value) => normalizeFieldName(value)));
+  const out = { ...(raw.attrs || {}) };
+  Object.entries(raw || {}).forEach(([key, value]) => {
+    if (key === 'attrs') return;
+    if (reserved.has(normalizeFieldName(key))) return;
+    out[key] = value;
   });
+  return out;
+}
+
+function sanitizeNode(raw, fallbackIndex) {
+  const id = findCanonicalValue(raw, ['id', 'nodeid', 'identifier']);
+  const label = findCanonicalValue(raw, ['label', 'name', 'title']);
+  const x = findCanonicalValue(raw, ['x', 'posx', 'positionx']);
+  const y = findCanonicalValue(raw, ['y', 'posy', 'positiony']);
+  const z = findCanonicalValue(raw, ['z', 'posz', 'positionz']);
+  const size = findCanonicalValue(raw, ['size', 'nodesize', 'value']);
+  const color = findCanonicalValue(raw, ['color', 'colour', 'rgb']);
+  const attrs = buildAttrBag(raw, ['id', 'nodeid', 'identifier', 'label', 'name', 'title', 'x', 'posx', 'positionx', 'y', 'posy', 'positiony', 'z', 'posz', 'positionz', 'size', 'nodesize', 'value', 'color', 'colour', 'rgb']);
   return {
-    id: String(raw.id ?? fallbackIndex),
-    label: raw.label != null ? String(raw.label) : String(raw.id ?? `Node ${fallbackIndex + 1}`),
-    x: Number.isFinite(Number(raw.x)) ? Number(raw.x) : undefined,
-    y: Number.isFinite(Number(raw.y)) ? Number(raw.y) : undefined,
-    z: Number.isFinite(Number(raw.z)) ? Number(raw.z) : undefined,
-    size: Number.isFinite(Number(raw.size)) ? Number(raw.size) : undefined,
-    color: raw.color != null ? String(raw.color) : undefined,
+    id: String(id ?? fallbackIndex),
+    label: label != null ? String(label) : String(id ?? `Node ${fallbackIndex + 1}`),
+    x: Number.isFinite(Number(x)) ? Number(x) : undefined,
+    y: Number.isFinite(Number(y)) ? Number(y) : undefined,
+    z: Number.isFinite(Number(z)) ? Number(z) : undefined,
+    size: Number.isFinite(Number(size)) ? Number(size) : undefined,
+    color: color != null ? String(color) : undefined,
     attrs
   };
 }
 
 function sanitizeEdge(raw, fallbackIndex) {
-  const attrs = { ...(raw.attrs || {}) };
-  const reserved = new Set(['id', 'source', 'target', 'weight']);
-  Object.entries(raw).forEach(([key, value]) => {
-    if (!reserved.has(key) && key !== 'attrs') attrs[key] = value;
-  });
+  const id = findCanonicalValue(raw, ['id', 'edgeid', 'identifier']);
+  const source = findCanonicalValue(raw, ['source', 'from', 'src']);
+  const target = findCanonicalValue(raw, ['target', 'to', 'dst', 'destination']);
+  const weight = findCanonicalValue(raw, ['weight', 'value', 'count']);
+  const attrs = buildAttrBag(raw, ['id', 'edgeid', 'identifier', 'source', 'from', 'src', 'target', 'to', 'dst', 'destination', 'weight', 'value', 'count']);
   return {
-    id: String(raw.id ?? fallbackIndex),
-    source: raw.source != null ? String(raw.source) : undefined,
-    target: raw.target != null ? String(raw.target) : undefined,
-    weight: Number.isFinite(Number(raw.weight)) ? Number(raw.weight) : 1,
+    id: String(id ?? fallbackIndex),
+    source: source != null ? String(source) : undefined,
+    target: target != null ? String(target) : undefined,
+    weight: Number.isFinite(Number(weight)) ? Number(weight) : 1,
     attrs
   };
 }
 
 export async function loadGraphFromFiles({ gexfFile, nodesCsvFile, edgesCsvFile, onProgress = null, onPhase = null }) {
+  if (nodesCsvFile && edgesCsvFile) {
+    onPhase?.('Reading CSV files…');
+    onProgress?.(10);
+    const [rawNodes, rawEdges] = await Promise.all([parseCsvFile(nodesCsvFile), parseCsvFile(edgesCsvFile)]);
+    onProgress?.(100);
+    return { nodes: rawNodes, edges: rawEdges };
+  }
   if (gexfFile) {
     return parseGexfFile(gexfFile, { onProgress, onPhase });
   }
   if (!nodesCsvFile || !edgesCsvFile) {
     throw new Error('Provide one GEXF file, or both nodes and edges CSV files.');
   }
-  onPhase?.('Reading CSV files…');
-  onProgress?.(10);
-  const [rawNodes, rawEdges] = await Promise.all([parseCsvFile(nodesCsvFile), parseCsvFile(edgesCsvFile)]);
-  onProgress?.(100);
-  return { nodes: rawNodes, edges: rawEdges };
 }
 
 function isNumericLike(value) {

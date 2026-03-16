@@ -26,16 +26,24 @@ function buildGraphologyGraph({ nodes, edges, adjustSizes }) {
     });
   }
 
+  const edgeMap = new Map();
   for (let i = 0; i < edges.length; i += 1) {
     const edge = edges[i];
     if (edge.sourceIndex === edge.targetIndex) continue;
-    const key = String(i);
-    if (!graph.hasEdge(key)) {
-      graph.addEdgeWithKey(key, String(edge.sourceIndex), String(edge.targetIndex), {
-        weight: Number.isFinite(Number(edge.weight)) ? Number(edge.weight) : 1
-      });
-    }
+    const a = Math.min(edge.sourceIndex, edge.targetIndex);
+    const b = Math.max(edge.sourceIndex, edge.targetIndex);
+    const pairKey = `${a}|${b}`;
+    const prev = edgeMap.get(pairKey) || 0;
+    const weight = Number.isFinite(Number(edge.weight)) ? Number(edge.weight) : 1;
+    edgeMap.set(pairKey, prev + weight);
   }
+
+  let edgeCounter = 0;
+  edgeMap.forEach((weight, pairKey) => {
+    const [a, b] = pairKey.split('|');
+    if (graph.hasEdge(a, b)) return;
+    graph.addEdgeWithKey(`agg-${edgeCounter++}`, a, b, { weight });
+  });
 
   return graph;
 }

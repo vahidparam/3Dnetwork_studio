@@ -63,8 +63,10 @@
         <button id="loadGraphBtn">Load graph</button>
         <div class="hint">
           Supported input: GEXF or nodes/edges CSV.<br/>
+          CSV headers are case-insensitive, so <code>id</code>/<code>ID</code>, <code>source</code>/<code>Source</code>, <code>x</code>/<code>X</code>, and similar variants all work.<br/>
           Nodes CSV expected: <code>id</code>, optional <code>label</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>size</code>, <code>color</code>.<br/>
           Edges CSV expected: <code>source</code>, <code>target</code>, optional <code>weight</code>.<br/>
+          Duplicate CSV edges are accepted for loading; ForceAtlas2 internally aggregates them for layout stability.<br/>
           Large GEXF files use progressive loading feedback before parsing.
         </div>
       </section>
