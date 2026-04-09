@@ -134,7 +134,16 @@ The strongest fabrication path is usually:
 - skeleton or simplified bundle sources,
 - thicker minimum radius,
 - a base plate or relief mode,
-- caution with very dense raw bundles.
+- caution with very dense raw bundles,
+- and node solids chosen for printability and readability.
+
+### Node solids
+The fabrication step can assign printable node shapes in three ways:
+- one shared shape for all nodes,
+- categorical shape mapping from a node attribute,
+- or shape mapping from the current node colors.
+
+This is useful when you want communities, roles, or other categories to remain legible in a printed object without relying only on color.
 
 ### Printability notes
 The current printability checks are heuristic. They warn about:
@@ -216,9 +225,8 @@ The studio is literature-aware. The UI surfaces method cards and reference badge
   https://doi.org/10.3390/e20090625  
   Motivates the comparison board and bundle-quality summaries.
 
-
-
 ---
+
 
 ## Final note
 

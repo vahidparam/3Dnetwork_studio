@@ -206,6 +206,8 @@ export class App {
     this.dom = {
       root: getEl('studioShell'),
       workspace: getEl('workspace'),
+      viewportStage: getEl('viewportStage'),
+      topNavigator: getEl('topNavigator'),
       leftRail: getEl('leftRail'),
       rightRail: getEl('rightRail'),
       toggleLeftRailBtn: getEl('toggleLeftRailBtn'),
@@ -263,7 +265,8 @@ export class App {
       loadGraphBtn: getEl('loadGraphBtn'),
       demoGraphSelect: getEl('demoGraphSelect'),
       loadDemoGraphBtn: getEl('loadDemoGraphBtn'),
-      fitViewBtn: getEl('fitViewBtn'),
+      fitSceneFloatingBtn: getEl('fitSceneFloatingBtn'),
+      fullscreenBtn: getEl('fullscreenBtn'),
       centerDraggedLayoutBtn: getEl('centerDraggedLayoutBtn'),
 
       layoutSource: getEl('layoutSource'),
@@ -329,6 +332,9 @@ export class App {
       fabricationRadius: getEl('fabricationRadius'),
       fabricationWidth: getEl('fabricationWidth'),
       nodeConnectorScale: getEl('nodeConnectorScale'),
+      nodeShapeMode: getEl('nodeShapeMode'),
+      nodeShapeConstant: getEl('nodeShapeConstant'),
+      nodeShapeAttr: getEl('nodeShapeAttr'),
       reliefDepth: getEl('reliefDepth'),
       addBasePlate: getEl('addBasePlate'),
       addPedestal: getEl('addPedestal'),
@@ -401,7 +407,8 @@ export class App {
       bundleCache: new Map(),
       currentMode: 'load2d',
       dragState: null,
-      suppressClick: false
+      suppressClick: false,
+      uiTheme: 'dark-gray'
     };
 
     this.stepOrder = ['load2d', 'map3d', 'bundle', 'compare', 'fabricate', 'style', 'export'];
@@ -456,6 +463,9 @@ export class App {
 
     this.populateStaticUi();
     this.bindEvents();
+    this.applyUiTheme(this.state.uiTheme);
+    this.updateFullscreenUi();
+    this.syncLayoutMetrics();
     this.setMode('load2d');
     this.applyStylePresetUi();
     this.updateStatus('Ready. Load a graph or choose one of the classic demo networks in Step 1.');
@@ -463,10 +473,46 @@ export class App {
     this.renderEmptyState();
   }
 
+  syncLayoutMetrics() {
+    const navHeight = Math.max(72, Math.ceil(this.dom.topNavigator?.getBoundingClientRect().height || 88));
+    document.documentElement.style.setProperty('--topbar-h', `${navHeight}px`);
+  }
+
+  applyUiTheme() {
+    const safeTheme = 'dark-gray';
+    this.state.uiTheme = safeTheme;
+    document.body.dataset.uiTheme = safeTheme;
+  }
+
+  async toggleFullscreen() {
+    try {
+      if (!document.fullscreenElement) {
+        await (this.dom.root?.requestFullscreen?.() || document.documentElement.requestFullscreen?.());
+      } else {
+        await document.exitFullscreen?.();
+      }
+    } catch (error) {
+      console.warn('Fullscreen toggle failed', error);
+    }
+    this.updateFullscreenUi();
+  }
+
+  updateFullscreenUi() {
+    if (!this.dom.fullscreenBtn) return;
+    const active = !!document.fullscreenElement;
+    this.dom.fullscreenBtn.classList.toggle('active', active);
+    this.dom.fullscreenBtn.textContent = active ? '🗗' : '⛶';
+    this.dom.fullscreenBtn.title = active ? 'Exit fullscreen' : 'Enter fullscreen';
+    this.dom.fullscreenBtn.setAttribute('aria-label', active ? 'Exit fullscreen' : 'Enter fullscreen');
+  }
+
   bindEvents() {
     this.dom.toggleLeftRailBtn?.addEventListener('click', () => {
       this.dom.leftRail?.classList.toggle('collapsed');
       this.dom.workspace?.classList.toggle('left-collapsed');
+      const collapsed = this.dom.leftRail?.classList.contains('collapsed');
+      if (this.dom.toggleLeftRailBtn) this.dom.toggleLeftRailBtn.textContent = collapsed ? 'Tools' : 'Collapse';
+      this.syncLayoutMetrics();
       this.sceneController.resize();
     });
 
@@ -475,6 +521,7 @@ export class App {
       this.dom.workspace?.classList.toggle('right-collapsed');
       const collapsed = this.dom.rightRail?.classList.contains('collapsed');
       if (this.dom.toggleRightRailBtn) this.dom.toggleRightRailBtn.textContent = collapsed ? 'Guide' : 'Collapse';
+      this.syncLayoutMetrics();
       this.sceneController.resize();
     });
 
@@ -489,6 +536,7 @@ export class App {
       this.dom.sceneToolsPanel?.classList.toggle('collapsed');
       const collapsed = this.dom.sceneToolsPanel?.classList.contains('collapsed');
       if (this.dom.sceneToolsCollapseBtn) this.dom.sceneToolsCollapseBtn.textContent = collapsed ? '⟩' : '⟨';
+      this.syncLayoutMetrics();
       this.sceneController.resize();
     });
 
@@ -513,7 +561,10 @@ export class App {
 
     this.dom.loadDemoGraphBtn?.addEventListener('click', () => this.loadDemoGraph());
     this.dom.loadGraphBtn.addEventListener('click', () => this.loadUploadedGraph());
-    this.dom.fitViewBtn.addEventListener('click', () => this.fitScene());
+    this.dom.fitSceneFloatingBtn?.addEventListener('click', () => this.fitScene());
+    this.dom.fullscreenBtn?.addEventListener('click', () => this.toggleFullscreen());
+    window.addEventListener('resize', () => this.syncLayoutMetrics());
+    document.addEventListener('fullscreenchange', () => { this.updateFullscreenUi(); this.syncLayoutMetrics(); this.sceneController.resize(); });
     this.dom.centerDraggedLayoutBtn?.addEventListener('click', () => {
       if (!this.state.positions2D.length) return;
       this.state.positions2D = recenterPositions(this.state.positions2D);
@@ -554,6 +605,7 @@ export class App {
     });
 
     this.dom.filterAttr.addEventListener('change', () => this.populateFilterValues());
+    this.dom.nodeShapeMode?.addEventListener('change', () => this.updateFabricationShapeControls());
     this.dom.runBundlingBtn.addEventListener('click', async () => this.runSelectedBundling());
     this.dom.extractSkeletonBtn.addEventListener('click', () => this.runSkeletonExtraction());
     this.dom.displayLayer.addEventListener('change', () => {
@@ -647,6 +699,7 @@ export class App {
 
   populateStaticUi() {
     setOptions(this.dom.stylePreset, Object.keys(STYLE_PRESETS), { selected: 'scientific-dark' });
+    this.updateFabricationShapeControls();
     setOptions(this.dom.compareLeft, METHOD_LIBRARY.map((m) => m.id), { selected: 'kde' });
     setOptions(this.dom.compareRight, METHOD_LIBRARY.map((m) => m.id), { selected: 'mingle' });
 
@@ -858,6 +911,7 @@ export class App {
       }
     }
 
+    this.syncLayoutMetrics();
     this.sceneController.resize();
   }
 
@@ -1025,6 +1079,8 @@ export class App {
     setOptions(this.dom.colorAttr, allAttrs, { includeBlank: true });
     setOptions(this.dom.filterAttr, categoricalAttrs, { includeBlank: true, blankLabel: 'All nodes' });
     setOptions(this.dom.layerAttr, categoricalAttrs, { includeBlank: true });
+    const shapeAttrs = Array.from(new Set(['color', ...allAttrs]));
+    setOptions(this.dom.nodeShapeAttr, shapeAttrs, { includeBlank: true, blankLabel: 'Pick an attribute' });
 
     const preferredColor = categoricalAttrs.includes('community') ? 'community' : allAttrs[0] || '';
     if (preferredColor) this.dom.colorAttr.value = preferredColor;
@@ -1036,10 +1092,75 @@ export class App {
     if (preferredLayer) this.dom.layerAttr.value = preferredLayer;
     const preferredFilter = categoricalAttrs.includes('community') ? 'community' : categoricalAttrs[0] || '';
     if (preferredFilter) this.dom.filterAttr.value = preferredFilter;
+    const preferredShapeAttr = categoricalAttrs.includes('community') ? 'community' : (shapeAttrs.includes('color') ? 'color' : shapeAttrs[0] || '');
+    if (preferredShapeAttr) this.dom.nodeShapeAttr.value = preferredShapeAttr;
     this.populateFilterValues();
+    this.updateFabricationShapeControls();
 
     const available = graph.flags.has2DPositions ? 'existing' : 'forceatlas2';
     this.dom.layoutSource.value = available;
+  }
+
+  updateFabricationShapeControls() {
+    const mode = this.dom.nodeShapeMode?.value || 'constant';
+    if (this.dom.nodeShapeAttr) this.dom.nodeShapeAttr.disabled = mode !== 'attribute';
+  }
+
+  buildFabricationNodeDescriptors() {
+    const graph = this.state.graph;
+    if (!graph) return { nodes: [], mappingHtml: '' };
+    const visibleIndices = this.state.positions3D.map((_, i) => i).filter((i) => this.state.visibleMask[i]);
+    const mode = this.dom.nodeShapeMode?.value || 'constant';
+    const baseShape = this.dom.nodeShapeConstant?.value || 'sphere';
+    const attr = this.dom.nodeShapeAttr?.value || '';
+    const shapeCycle = [baseShape, 'sphere', 'cube', 'tri-prism', 'square-prism', 'hex-prism', 'octahedron', 'icosahedron']
+      .filter((value, index, array) => array.indexOf(value) === index);
+    const shapeLabels = {
+      sphere: 'Sphere',
+      cube: 'Cube',
+      'tri-prism': 'Triangular prism',
+      'square-prism': 'Square prism',
+      'hex-prism': 'Hexagonal prism',
+      octahedron: 'Octahedron',
+      icosahedron: 'Icosahedron'
+    };
+
+    const keyedValues = [];
+    let mappingHtml = '';
+    if (mode === 'attribute' && attr) {
+      const values = [...new Set(visibleIndices.map((i) => String(graph.nodes[i]?.attrs?.[attr] ?? graph.nodes[i]?.[attr] ?? 'missing')))].sort((a, b) => a.localeCompare(b));
+      const map = new Map(values.map((value, idx) => [value, shapeCycle[idx % shapeCycle.length]]));
+      mappingHtml = `<div class="top-gap"><strong>Node shape mapping</strong>${values.map((value) => `<div>${htmlEscape(value)} → ${htmlEscape(shapeLabels[map.get(value)] || map.get(value))}</div>`).join('')}</div>`;
+      visibleIndices.forEach((i) => keyedValues.push({
+        index: i,
+        shape: map.get(String(graph.nodes[i]?.attrs?.[attr] ?? graph.nodes[i]?.[attr] ?? 'missing')) || baseShape,
+        color: colorToCss(this.state.nodeColors[i], this.dom.constantNodeColor?.value || '#86b7ff')
+      }));
+    } else if (mode === 'node-color') {
+      const values = [...new Set(visibleIndices.map((i) => colorToCss(this.state.nodeColors[i], this.dom.constantNodeColor?.value || '#86b7ff')))].sort((a, b) => a.localeCompare(b));
+      const map = new Map(values.map((value, idx) => [value, shapeCycle[idx % shapeCycle.length]]));
+      mappingHtml = `<div class="top-gap"><strong>Node shape mapping</strong>${values.map((value) => `<div><span class="color-swatch" style="background:${htmlEscape(value)}"></span>${htmlEscape(value)} → ${htmlEscape(shapeLabels[map.get(value)] || map.get(value))}</div>`).join('')}</div>`;
+      visibleIndices.forEach((i) => {
+        const nodeColor = colorToCss(this.state.nodeColors[i], this.dom.constantNodeColor?.value || '#86b7ff');
+        keyedValues.push({ index: i, shape: map.get(nodeColor) || baseShape, color: nodeColor });
+      });
+    } else {
+      mappingHtml = `<div class="top-gap"><strong>Node shape</strong>: ${htmlEscape(shapeLabels[baseShape] || baseShape)}</div>`;
+      visibleIndices.forEach((i) => keyedValues.push({
+        index: i,
+        shape: baseShape,
+        color: colorToCss(this.state.nodeColors[i], this.dom.constantNodeColor?.value || '#86b7ff')
+      }));
+    }
+
+    const nodes = keyedValues.map(({ index, shape, color }) => ({
+      x: this.state.positions3D[index].x,
+      y: this.state.positions3D[index].y,
+      z: this.state.positions3D[index].z,
+      shape,
+      color
+    }));
+    return { nodes, mappingHtml };
   }
 
   populateFilterValues() {
@@ -1560,12 +1681,14 @@ export class App {
     }
 
     const style = getStylePreset(this.dom.stylePreset.value);
-    const group = buildFabricationGroup(polylines, this.state.positions3D.filter((_, i) => this.state.visibleMask[i]), {
+    const fabricationNodes = this.buildFabricationNodeDescriptors();
+    const group = buildFabricationGroup(polylines, fabricationNodes.nodes, {
       radius: Number(this.dom.fabricationRadius.value) || 0.5,
       taper: Number(this.dom.solidTaper.value) || 0.08,
       addBasePlate: this.dom.addBasePlate.checked,
       addPedestal: this.dom.addPedestal.checked,
       nodeConnectorScale: Number(this.dom.nodeConnectorScale.value) || 1.6,
+      nodeShape: this.dom.nodeShapeConstant?.value || 'sphere',
       materialMode: getStylePreset(this.dom.stylePreset.value).solidMaterial,
       color: style.edgeEnd,
       opacity: 0.98,
@@ -1591,6 +1714,8 @@ export class App {
     this.dom.printabilityPanel.innerHTML = `
       <div><strong>Longest segment</strong>: ${formatNumber(this.state.fabricationInfo.longestSegment)}</div>
       <div><strong>Total segments</strong>: ${formatNumber(this.state.fabricationInfo.totalSegments, 0)}</div>
+      <div><strong>Visible node solids</strong>: ${formatNumber(fabricationNodes.nodes.length, 0)}</div>
+      ${fabricationNodes.mappingHtml}
       <div class="top-gap">${this.state.fabricationInfo.warnings.map((w) => `<div>• ${htmlEscape(w)}</div>`).join('')}</div>
     `;
     this.dom.displayLayer.value = 'fabrication';
@@ -1770,6 +1895,18 @@ export class App {
         backgroundColor: this.dom.backgroundColor?.value,
         focusDim: this.dom.focusDim?.value,
         displayLayer: this.dom.displayLayer.value,
+        fabricationSource: this.dom.fabricationSource?.value,
+        fabricationRadius: this.dom.fabricationRadius?.value,
+        fabricationWidth: this.dom.fabricationWidth?.value,
+        nodeConnectorScale: this.dom.nodeConnectorScale?.value,
+        nodeShapeMode: this.dom.nodeShapeMode?.value,
+        nodeShapeConstant: this.dom.nodeShapeConstant?.value,
+        nodeShapeAttr: this.dom.nodeShapeAttr?.value,
+        reliefDepth: this.dom.reliefDepth?.value,
+        addBasePlate: this.dom.addBasePlate?.checked,
+        addPedestal: this.dom.addPedestal?.checked,
+        wallRelief: this.dom.wallRelief?.checked,
+        uiTheme: this.state.uiTheme,
         currentMode: this.state.currentMode
       },
       camera: {
@@ -1795,8 +1932,10 @@ export class App {
       this.sceneController.controls.update();
     }
     if (preset?.ui?.currentMode) this.setMode(preset.ui.currentMode);
+    this.updateFabricationShapeControls();
     this.applyStylePresetUi();
     this.state.displayLayer = this.dom.displayLayer.value;
+    if (preset?.ui?.uiTheme) this.applyUiTheme(preset.ui.uiTheme);
     this.refreshEncodingsAndLayers();
   }
 

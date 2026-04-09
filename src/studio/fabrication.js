@@ -33,6 +33,36 @@ function buildMaterial(mode = 'matte', color = '#a9d5ff', opacity = 0.9) {
   return new THREE.MeshStandardMaterial({ color: base, roughness: 0.58, metalness: 0.05, transparent: true, opacity: 0.96 * opacity });
 }
 
+function buildNodeGeometry(shape = 'sphere') {
+  switch (shape) {
+    case 'cube':
+      return new THREE.BoxGeometry(1.7, 1.7, 1.7);
+    case 'tri-prism':
+      return new THREE.CylinderGeometry(1.0, 1.0, 1.8, 3);
+    case 'square-prism':
+      return new THREE.CylinderGeometry(1.0, 1.0, 1.8, 4);
+    case 'hex-prism':
+      return new THREE.CylinderGeometry(1.0, 1.0, 1.8, 6);
+    case 'octahedron':
+      return new THREE.OctahedronGeometry(1.2);
+    case 'icosahedron':
+      return new THREE.IcosahedronGeometry(1.15);
+    default:
+      return new THREE.SphereGeometry(1.0, 12, 12);
+  }
+}
+
+function normalizeNodeDescriptor(point, defaultShape = 'sphere', defaultColor = '#b0d7ff') {
+  return {
+    x: Number(point?.x) || 0,
+    y: Number(point?.y) || 0,
+    z: Number(point?.z) || 0,
+    shape: point?.shape || defaultShape,
+    color: point?.color || defaultColor
+  };
+}
+
+
 export function buildPolylineMeshGroup(polylines = [], options = {}) {
   const {
     radius = 0.35,
@@ -99,11 +129,13 @@ export function buildFabricationGroup(polylines = [], nodePositions = [], option
     wallRelief = false,
     reliefDepth = 18,
     maxSegments = 12000,
-    maxCurves = 2000
+    maxCurves = 2000,
+    nodeShape = 'sphere'
   } = options;
 
   const group = new THREE.Group();
-  const allPoints = [...polylines.flat(), ...nodePositions];
+  const normalizedNodes = (nodePositions || []).map((point) => normalizeNodeDescriptor(point, nodeShape, color));
+  const allPoints = [...polylines.flat(), ...normalizedNodes];
   if (!allPoints.length) return group;
   const bounds = new THREE.Box3();
   allPoints.forEach((point) => bounds.expandByPoint(new THREE.Vector3(point.x, point.y, wallRelief ? Math.min(point.z || 0, reliefDepth) : (point.z || 0))));
@@ -116,10 +148,12 @@ export function buildFabricationGroup(polylines = [], nodePositions = [], option
     z: (wallRelief ? Math.min(point.z || 0, reliefDepth) : (point.z || 0)) * scale
   })));
 
-  const scaledNodes = nodePositions.map((point) => ({
+  const scaledNodes = normalizedNodes.map((point) => ({
     x: point.x * scale,
     y: point.y * scale,
-    z: (wallRelief ? Math.min(point.z || 0, reliefDepth) : (point.z || 0)) * scale
+    z: (wallRelief ? Math.min(point.z || 0, reliefDepth) : (point.z || 0)) * scale,
+    shape: point.shape || nodeShape,
+    color: point.color || color
   }));
 
   const structure = buildPolylineMeshGroup(scaledPolylines, {
@@ -135,10 +169,15 @@ export function buildFabricationGroup(polylines = [], nodePositions = [], option
   });
   group.add(structure);
 
-  const nodeMaterial = buildMaterial(materialMode, color, opacity);
-  const nodeGeometry = new THREE.SphereGeometry(1, 10, 10);
+  const geometryCache = new Map();
+  const materialCache = new Map();
   scaledNodes.forEach((point) => {
-    const mesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
+    const shapeKey = point.shape || nodeShape;
+    const colorKey = point.color || color;
+    if (!geometryCache.has(shapeKey)) geometryCache.set(shapeKey, buildNodeGeometry(shapeKey));
+    const materialKey = `${materialMode}|${colorKey}|${opacity}`;
+    if (!materialCache.has(materialKey)) materialCache.set(materialKey, buildMaterial(materialMode, colorKey, opacity));
+    const mesh = new THREE.Mesh(geometryCache.get(shapeKey), materialCache.get(materialKey));
     mesh.position.set(point.x, point.y, point.z);
     mesh.scale.setScalar(radius * nodeConnectorScale * scale);
     group.add(mesh);

@@ -17,7 +17,7 @@
     }
   </script>
 </head>
-<body>
+<body data-ui-theme="dark-gray">
   <div id="studioShell" class="wizard-shell">
     <header id="topNavigator" class="top-navigator">
       <div class="top-brand">
@@ -25,17 +25,14 @@
         <div class="brand-title">Network Studio</div>
       </div>
       <nav id="modeTabs" class="step-tabs" aria-label="Workflow navigator">
-        <button class="mode-tab active" data-mode="load2d"><span class="step-num">1</span><span>Load &amp; 2D</span></button>
-        <button class="mode-tab" data-mode="map3d"><span class="step-num">2</span><span>3D mapping</span></button>
-        <button class="mode-tab" data-mode="bundle"><span class="step-num">3</span><span>Bundle</span></button>
-        <button class="mode-tab" data-mode="compare"><span class="step-num">4</span><span>Compare &amp; skeleton</span></button>
-        <button class="mode-tab" data-mode="fabricate"><span class="step-num">5</span><span>Fabricate</span></button>
-        <button class="mode-tab" data-mode="style"><span class="step-num">6</span><span>Style</span></button>
-        <button class="mode-tab" data-mode="export"><span class="step-num">7</span><span>Export</span></button>
+        <button class="mode-tab active" data-mode="load2d"><span class="step-num">1</span><span class="step-icon" aria-hidden="true">⬡</span><span class="step-label">Load &amp; 2D</span></button>
+        <button class="mode-tab" data-mode="map3d"><span class="step-num">2</span><span class="step-icon" aria-hidden="true">◎</span><span class="step-label">3D mapping</span></button>
+        <button class="mode-tab" data-mode="bundle"><span class="step-num">3</span><span class="step-icon" aria-hidden="true">≋</span><span class="step-label">Bundle</span></button>
+        <button class="mode-tab" data-mode="compare"><span class="step-num">4</span><span class="step-icon" aria-hidden="true">⇄</span><span class="step-label">Compare &amp; skeleton</span></button>
+        <button class="mode-tab" data-mode="fabricate"><span class="step-num">5</span><span class="step-icon" aria-hidden="true">▥</span><span class="step-label">Fabricate</span></button>
+        <button class="mode-tab" data-mode="style"><span class="step-num">6</span><span class="step-icon" aria-hidden="true">✦</span><span class="step-label">Style</span></button>
+        <button class="mode-tab" data-mode="export"><span class="step-num">7</span><span class="step-icon" aria-hidden="true">⤓</span><span class="step-label">Export</span></button>
       </nav>
-      <div class="top-actions">
-        <button id="fitViewBtn" class="ghost small">Fit view</button>
-      </div>
     </header>
 
     <div id="workspace" class="workspace">
@@ -313,6 +310,30 @@
                 <label class="field"><span>Relief depth</span><input id="reliefDepth" type="number" min="1" max="60" step="1" value="18" /></label>
               </div>
               <div class="grid2">
+                <label class="field"><span>Node shape mode</span>
+                  <select id="nodeShapeMode">
+                    <option value="constant">Single printable shape</option>
+                    <option value="attribute">Map shapes from attribute</option>
+                    <option value="node-color">Map shapes from node color</option>
+                  </select>
+                </label>
+                <label class="field"><span>Base node shape</span>
+                  <select id="nodeShapeConstant">
+                    <option value="sphere">Sphere</option>
+                    <option value="cube">Cube</option>
+                    <option value="tri-prism">Triangular prism</option>
+                    <option value="square-prism">Square prism</option>
+                    <option value="hex-prism">Hexagonal prism</option>
+                    <option value="octahedron">Octahedron</option>
+                    <option value="icosahedron">Icosahedron</option>
+                  </select>
+                </label>
+              </div>
+              <label class="field"><span>Shape-driving attribute</span>
+                <select id="nodeShapeAttr"><option value="">Pick an attribute</option></select>
+              </label>
+              <div class="small muted top-gap">Use a single printable node shape, or automatically assign different printable solids from an attribute or the current node colors. The base node shape becomes the first shape in the assignment cycle.</div>
+              <div class="grid2">
                 <label class="checkbox"><input id="addBasePlate" type="checkbox" checked /><span>Add base plate</span></label>
                 <label class="checkbox"><input id="addPedestal" type="checkbox" /><span>Add pedestal</span></label>
               </div>
@@ -445,6 +466,11 @@
             </div>
           </div>
         </aside>
+
+        <div class="viewport-fab" aria-label="Viewport tools">
+          <button id="fitSceneFloatingBtn" class="viewport-fab-btn" title="Fit graph to view" aria-label="Fit graph to view">⌗</button>
+          <button id="fullscreenBtn" class="viewport-fab-btn" title="Toggle fullscreen" aria-label="Toggle fullscreen">⛶</button>
+        </div>
 
         <div class="wizard-footer">
           <div class="wizard-flow-caption">Use the top navigator to jump, or move step-by-step like a studio workflow.</div>
