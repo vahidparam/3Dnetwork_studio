@@ -105,7 +105,7 @@ export class NodeRenderer {
     return points;
   }
 
-  update({ positions, sizes, colors, visibleMask = null, emphasisSet = null, selectedIndex = -1 }) {
+  update({ positions, sizes, colors, visibleMask = null, emphasisSet = null, selectedIndex = -1, dimOpacity = 0.12 }) {
     const count = positions.length;
     if (!this.mesh || this.capacity !== count) {
       this.dispose();
@@ -114,6 +114,7 @@ export class NodeRenderer {
       this.scene.add(this.mesh);
     }
 
+    const hasFocus = emphasisSet && emphasisSet.size > 0;
     const posAttr = this.mesh.geometry.getAttribute('position');
     const colorAttr = this.mesh.geometry.getAttribute('aColor');
     const sizeAttr = this.mesh.geometry.getAttribute('aSize');
@@ -134,7 +135,8 @@ export class NodeRenderer {
       colorAttr.setXYZ(i, color.r, color.g, color.b);
       sizeAttr.setX(i, visible ? size : 0.2);
       stateAttr.setX(i, i === selectedIndex ? 2 : emphasized ? 1 : 0);
-      opacityAttr.setX(i, visible ? 1 : 0);
+      const alpha = !visible ? 0 : hasFocus ? (emphasized ? 1 : dimOpacity) : 1;
+      opacityAttr.setX(i, alpha);
     }
 
     posAttr.needsUpdate = true;

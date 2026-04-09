@@ -4,15 +4,34 @@ import { SceneController } from './render/scene.js';
 import { NodeRenderer } from './render/nodes.points.js';
 import { EdgeRenderer } from './render/edges.js';
 import { LabelRenderer } from './render/labels.js';
-import { categoricalColor, colorLuminance, ensureContrast, hexToColor, numericRamp, parseLiteralColor, boostVisibility } from './utils/colors.js';
-import { evenlySampleIndexes } from './utils/math.js';
 import { buildSceneSvg } from './utils/export.js';
+import { METHOD_LIBRARY, REFERENCE_LIBRARY, getMethodById } from './data/methods.js';
+import { DEMO_GRAPH_OPTIONS, generateDemoRawGraph } from './studio/demo.js';
+import { buildRawPolylines } from './studio/geometry.js';
+import {
+  QUALITY_PRESETS,
+  STYLE_PRESETS,
+  getQualityPreset,
+  getStylePreset,
+  getNodeSizes,
+  getNodeColors,
+  buildVisibleMask,
+  mapPositionsTo3D,
+  computeEdgeColors,
+  metricsFromPolylines,
+  extractDensitySkeleton,
+  buildPreviewSvg,
+  serializeStudioState
+} from './studio/analysis.js';
+import { buildFabricationGroup, buildPolylineMeshGroup, evaluatePrintability, exportGroup } from './studio/fabrication.js';
 
 function getEl(id) {
   return document.getElementById(id);
 }
 
-function setOptions(select, values, { includeBlank = false, blankLabel = '—' } = {}) {
+function setOptions(select, values, { includeBlank = false, blankLabel = '—', selected = null } = {}) {
+  if (!select) return;
+  const normalized = Array.isArray(values) ? values : [];
   select.innerHTML = '';
   if (includeBlank) {
     const option = document.createElement('option');
@@ -20,26 +39,22 @@ function setOptions(select, values, { includeBlank = false, blankLabel = '—' }
     option.textContent = blankLabel;
     select.appendChild(option);
   }
-  if (!values.length && !includeBlank) {
+  if (!normalized.length && !includeBlank) {
     const option = document.createElement('option');
     option.value = '';
     option.textContent = '—';
     select.appendChild(option);
-    return;
   }
-  values.forEach((value) => {
+  normalized.forEach((value) => {
     const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
+    option.value = String(value);
+    option.textContent = String(value);
+    if (selected != null && String(value) === String(selected)) option.selected = true;
     select.appendChild(option);
   });
 }
 
-function formatValue(value, decimals = 2) {
-  return Number(value).toFixed(decimals);
-}
-
-function escapeHtml(value) {
+function htmlEscape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -48,11 +63,9 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function downloadDataUrl(dataUrl, filename) {
-  const a = document.createElement('a');
-  a.href = dataUrl;
-  a.download = filename;
-  a.click();
+function formatNumber(value, digits = 2) {
+  if (!Number.isFinite(Number(value))) return '—';
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
 function downloadBlob(blob, filename) {
@@ -61,548 +74,1673 @@ function downloadBlob(blob, filename) {
   a.href = url;
   a.download = filename;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-function colorToCss(color) {
+function downloadText(text, filename, type = 'application/json;charset=utf-8') {
+  downloadBlob(new Blob([text], { type }), filename);
+}
+
+function colorToCss(color, fallback = '#86b7ff') {
+  if (!color) return fallback;
+  if (typeof color === 'string') return color;
   return `#${color.getHexString()}`;
 }
 
-function mixColors(a, b, t = 0.5) {
-  return new THREE.Color(
-    a.r + (b.r - a.r) * t,
-    a.g + (b.g - a.g) * t,
-    a.b + (b.b - a.b) * t
-  );
+function clonePositions(positions = []) {
+  return positions.map((p) => ({ x: Number(p.x) || 0, y: Number(p.y) || 0, z: Number(p.z) || 0 }));
 }
 
-function clonePositions(arr) {
-  return arr.map((p) => ({ x: p.x, y: p.y, z: p.z || 0 }));
+function makeRandomPositions(count, spread = 90) {
+  return Array.from({ length: count }, () => ({
+    x: (Math.random() - 0.5) * spread,
+    y: (Math.random() - 0.5) * spread,
+    z: 0
+  }));
+}
+
+function makeCircularPositions(graph, radius = 52) {
+  const count = graph.nodes.length;
+  if (!count) return [];
+  return graph.nodes.map((_, i) => {
+    const a = (i / count) * Math.PI * 2;
+    return { x: Math.cos(a) * radius, y: Math.sin(a) * radius, z: 0 };
+  });
+}
+
+function makeGridPositions(graph, gap = 14) {
+  const count = graph.nodes.length;
+  const side = Math.ceil(Math.sqrt(count));
+  const offset = (side - 1) * gap * 0.5;
+  return graph.nodes.map((_, i) => ({
+    x: (i % side) * gap - offset,
+    y: Math.floor(i / side) * gap - offset,
+    z: 0
+  }));
+}
+
+function makeRadialPositions(graph, step = 9) {
+  const degree = graph.metrics.degree || [];
+  const order = graph.nodes.map((_, i) => i).sort((a, b) => (degree[b] || 0) - (degree[a] || 0));
+  const positions = new Array(graph.nodes.length);
+  order.forEach((nodeIndex, rank) => {
+    const ring = Math.floor(Math.sqrt(rank));
+    const ringCount = Math.max(6, ring * 8);
+    const local = rank - ring * ring;
+    const angle = (local / ringCount) * Math.PI * 2;
+    const radius = 10 + ring * step;
+    positions[nodeIndex] = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, z: 0 };
+  });
+  return positions.map((p) => p || { x: 0, y: 0, z: 0 });
+}
+
+function normalizePositions(positions = [], scale = 1) {
+  if (!positions.length) return [];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  positions.forEach((p) => {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  });
+  const cx = (minX + maxX) * 0.5;
+  const cy = (minY + maxY) * 0.5;
+  const size = Math.max(1, maxX - minX, maxY - minY);
+  const factor = (70 / size) * scale;
+  return positions.map((p) => ({ x: (p.x - cx) * factor, y: (p.y - cy) * factor, z: Number(p.z) || 0 }));
+}
+
+function recenterPositions(positions = []) {
+  if (!positions.length) return [];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  positions.forEach((p) => {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  });
+  const cx = (minX + maxX) * 0.5;
+  const cy = (minY + maxY) * 0.5;
+  return positions.map((p) => ({ x: (p.x - cx), y: (p.y - cy), z: Number(p.z) || 0 }));
+}
+
+function mapPositionsToGlobe(positions2D = [], radius = 96) {
+  if (!positions2D.length) return [];
+  const xs = positions2D.map((p) => Number(p.x) || 0);
+  const ys = positions2D.map((p) => Number(p.y) || 0);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = Math.max(1e-6, maxX - minX);
+  const spanY = Math.max(1e-6, maxY - minY);
+  const r = Math.max(10, Number(radius) || 96);
+  return positions2D.map((pos) => {
+    const u = (((Number(pos.x) || 0) - minX) / spanX);
+    const v = (((Number(pos.y) || 0) - minY) / spanY);
+    const lon = (u - 0.5) * Math.PI * 2.0;
+    const lat = (0.5 - v) * Math.PI;
+    const cosLat = Math.cos(lat);
+    return {
+      x: r * cosLat * Math.cos(lon),
+      y: r * Math.sin(lat),
+      z: r * cosLat * Math.sin(lon)
+    };
+  });
+}
+
+function summarizeNode(node) {
+  const attrs = Object.entries(node?.attrs || {});
+  const preview = attrs.slice(0, 10).map(([key, value]) => `<div><span class="kv-key">${htmlEscape(key)}</span><span class="kv-value">${htmlEscape(value)}</span></div>`).join('');
+  return `
+    <div class="selection-block">
+      <div><strong>${htmlEscape(node?.label || node?.id || 'Node')}</strong></div>
+      <div class="muted small">ID: ${htmlEscape(node?.id || '—')}</div>
+      ${preview ? `<div class="kv-grid top-gap">${preview}</div>` : '<div class="muted top-gap">No extra attributes.</div>'}
+    </div>
+  `;
 }
 
 export class App {
   constructor() {
-    this.state = {
-      graph: null,
-      base2DPositions: [],
-      positions2D: [],
-      positions3D: [],
-      nodeSizes: [],
-      nodeColors: [],
-      nodeColorMeta: null,
-      nodeSizeMeta: null,
-      stage: 1,
-      activeView: '2d',
-      selectedNodeIndex: null,
-      hoveredNodeIndex: null,
-      edgeLayer: { kind: 'preview', edgeIndexes: [] },
-      pinnedNodes: new Set(),
-      pinnedBasePositions: new Array(),
-      visibleMask: [],
-      dragState: null,
-      hoverPosition: { x: 0, y: 0 },
-      screenNodeCache: []
-    };
-    this.suppressClick = false;
-
     this.dom = {
-      canvas: getEl('viewport'),
+      root: getEl('studioShell'),
+      workspace: getEl('workspace'),
+      leftRail: getEl('leftRail'),
+      rightRail: getEl('rightRail'),
+      toggleLeftRailBtn: getEl('toggleLeftRailBtn'),
+      toggleRightRailBtn: getEl('toggleRightRailBtn'),
+      modeTabs: Array.from(document.querySelectorAll('.mode-tab')),
+      modePanels: Array.from(document.querySelectorAll('.wizard-panel')),
+      viewport: getEl('viewport'),
       labelsLayer: getEl('labelsLayer'),
+      tooltip: getEl('tooltip'),
+      overviewStats: getEl('overviewStats'),
+      selectionContent: getEl('selectionContent'),
+      bundleMetrics: getEl('bundleMetrics'),
+      layerContent: getEl('layerContent'),
+      layerAvailability: getEl('layerAvailability'),
+      overviewCard: getEl('overviewCard'),
+      selectionCard: getEl('selectionCard'),
+      bundleMetricsCard: getEl('bundleMetricsCard'),
+      layerCard: getEl('layerCard'),
+      sceneToolsPanel: getEl('sceneToolsPanel'),
+      sceneToolsCollapseBtn: getEl('sceneToolsCollapseBtn'),
+      detailsToggleBtn: getEl('detailsToggleBtn'),
+      detailsDrawer: getEl('detailsDrawer'),
+      openNetworkDetailsBtn: getEl('openNetworkDetailsBtn'),
+      networkDetailsModal: getEl('networkDetailsModal'),
+      closeNetworkDetailsBtn: getEl('closeNetworkDetailsBtn'),
+      quickDisplayLayer: getEl('quickDisplayLayer'),
+      quickBackgroundColor: getEl('quickBackgroundColor'),
+      quickEdgeOpacity: getEl('quickEdgeOpacity'),
+      quickShowNodes: getEl('quickShowNodes'),
+      quickShowLabels: getEl('quickShowLabels'),
+      quickShowGeometry: getEl('quickShowGeometry'),
       statusText: getEl('statusText'),
-      statsText: getEl('statsText'),
+      statusStats: getEl('statusStats'),
       progressOverlay: getEl('progressOverlay'),
       progressTitle: getEl('progressTitle'),
       progressBar: getEl('progressBar'),
       progressValue: getEl('progressValue'),
-      nodeInfoPanel: getEl('nodeInfoPanel'),
-      nodeInfoContent: getEl('nodeInfoContent'),
-      viewPanel: getEl('floatingViewPanel'),
-      showViewPanelBtn: getEl('showViewPanelBtn'),
-      legendPanel: getEl('legendPanel'),
-      legendContent: getEl('legendContent'),
-      tooltip: getEl('tooltip'),
-      helpModal: getEl('helpModal'),
-      helpModalTitle: getEl('helpModalTitle'),
-      helpModalBody: getEl('helpModalBody')
+      methodCards: getEl('methodCards'),
+      methodDetail: getEl('methodDetail'),
+      referenceDrawer: getEl('referenceDrawer'),
+      compareBoard: getEl('compareBoard'),
+      printabilityPanel: getEl('printabilityPanel'),
+      skeletonStats: getEl('skeletonStats'),
+      currentStepLabel: getEl('currentStepLabel'),
+      currentStepTitle: getEl('currentStepTitle'),
+      currentStepBody: getEl('currentStepBody'),
+      prevStepBtn: getEl('prevStepBtn'),
+      nextStepBtn: getEl('nextStepBtn'),
+      bundleParameterHelp: getEl('bundleParameterHelp'),
+      bundleParamFields: Array.from(document.querySelectorAll('.method-param')),
+
+      gexfFile: getEl('gexfFile'),
+      nodesCsvFile: getEl('nodesCsvFile'),
+      edgesCsvFile: getEl('edgesCsvFile'),
+      loadGraphBtn: getEl('loadGraphBtn'),
+      demoGraphSelect: getEl('demoGraphSelect'),
+      loadDemoGraphBtn: getEl('loadDemoGraphBtn'),
+      fitViewBtn: getEl('fitViewBtn'),
+      centerDraggedLayoutBtn: getEl('centerDraggedLayoutBtn'),
+
+      layoutSource: getEl('layoutSource'),
+      qualityMode: getEl('qualityMode'),
+      layoutIterations: getEl('layoutIterations'),
+      layoutRepulsion: getEl('layoutRepulsion'),
+      layoutGravity: getEl('layoutGravity'),
+      layoutScale: getEl('layoutScale'),
+      applyLayoutBtn: getEl('applyLayoutBtn'),
+      applyNodeAppearanceBtn: getEl('applyNodeAppearanceBtn'),
+
+      depthMode: getEl('depthMode'),
+      depthAttr: getEl('depthAttr'),
+      zScale: getEl('zScale'),
+      zCategoryGap: getEl('zCategoryGap'),
+      applyDepthBtn: getEl('applyDepthBtn'),
+
+      degreeMin: getEl('degreeMin'),
+      labelCount: getEl('labelCount'),
+      filterAttr: getEl('filterAttr'),
+      filterValue: getEl('filterValue'),
+      applyFilterBtn: getEl('applyFilterBtn'),
+
+      bundleSamples: getEl('bundleSamples'),
+      bundleIterations: getEl('bundleIterations'),
+      bundleStrength: getEl('bundleStrength'),
+      bundleLift: getEl('bundleLift'),
+      bundleClusterCount: getEl('bundleClusterCount'),
+      bundleHubCount: getEl('bundleHubCount'),
+      bundleDetour: getEl('bundleDetour'),
+      bundleExponent: getEl('bundleExponent'),
+      directionSplit: getEl('directionSplit'),
+      bundleGrid: getEl('bundleGrid'),
+      layerAttr: getEl('layerAttr'),
+      layerGap: getEl('layerGap'),
+      runBundlingBtn: getEl('runBundlingBtn'),
+      displayLayer: getEl('displayLayer'),
+
+      skeletonGrid: getEl('skeletonGrid'),
+      skeletonThreshold: getEl('skeletonThreshold'),
+      skeletonSimplify: getEl('skeletonSimplify'),
+      skeletonMinBranch: getEl('skeletonMinBranch'),
+      extractSkeletonBtn: getEl('extractSkeletonBtn'),
+
+      stylePreset: getEl('stylePreset'),
+      solidPreview: getEl('solidPreview'),
+      nodeSizeMode: getEl('nodeSizeMode'),
+      sizeAttr: getEl('sizeAttr'),
+      nodeColorMode: getEl('nodeColorMode'),
+      colorAttr: getEl('colorAttr'),
+      edgeColorMode: getEl('edgeColorMode'),
+      constantNodeColor: getEl('constantNodeColor'),
+      backgroundColor: getEl('backgroundColor'),
+      edgeOpacity: getEl('edgeOpacity'),
+      solidRadius: getEl('solidRadius'),
+      solidTaper: getEl('solidTaper'),
+      glowStrength: getEl('glowStrength'),
+      focusDim: getEl('focusDim'),
+      applyStyleBtn: getEl('applyStyleBtn'),
+      resetBackgroundBtn: getEl('resetBackgroundBtn'),
+
+      fabricationSource: getEl('fabricationSource'),
+      fabricationRadius: getEl('fabricationRadius'),
+      fabricationWidth: getEl('fabricationWidth'),
+      nodeConnectorScale: getEl('nodeConnectorScale'),
+      reliefDepth: getEl('reliefDepth'),
+      addBasePlate: getEl('addBasePlate'),
+      addPedestal: getEl('addPedestal'),
+      wallRelief: getEl('wallRelief'),
+      buildFabricationBtn: getEl('buildFabricationBtn'),
+      clearFabricationBtn: getEl('clearFabricationBtn'),
+      exportStlBtn: getEl('exportStlBtn'),
+      exportObjBtn: getEl('exportObjBtn'),
+      exportGlbBtn: getEl('exportGlbBtn'),
+
+      compareLeft: getEl('compareLeft'),
+      compareRight: getEl('compareRight'),
+      runCompareBtn: getEl('runCompareBtn'),
+
+      cameraIsoBtn: getEl('cameraIsoBtn'),
+      cameraTopBtn: getEl('cameraTopBtn'),
+      cameraSideBtn: getEl('cameraSideBtn'),
+      presetName: getEl('presetName'),
+      savedPresetSelect: getEl('savedPresetSelect'),
+      savePresetBtn: getEl('savePresetBtn'),
+      loadPresetBtn: getEl('loadPresetBtn'),
+      deletePresetBtn: getEl('deletePresetBtn'),
+      exportPngBtn: getEl('exportPngBtn'),
+      exportSvgBtn: getEl('exportSvgBtn'),
+      exportStateBtn: getEl('exportStateBtn')
     };
 
     this.sceneController = new SceneController({
-      canvas: this.dom.canvas,
-      onRender: (camera) => {
-        this.projectLabels(camera);
-        this.updateScreenNodeCache(camera);
-      }
+      canvas: this.dom.viewport,
+      onRender: () => this.onRenderFrame()
     });
     this.nodeRenderer = new NodeRenderer(this.sceneController.scene);
     this.edgeRenderer = new EdgeRenderer(this.sceneController.scene);
     this.labelRenderer = new LabelRenderer(this.dom.labelsLayer);
-    this.layoutWorker = null;
-    this.bundleWorker = null;
-    this.raycaster = new THREE.Raycaster();
-    this.raycaster.params.Points.threshold = 18;
-    this.pointer = new THREE.Vector2();
-    this.dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-    this.dragHit = new THREE.Vector3();
-    this.presetStorageKey = 'network3d-studio-presets-v3';
+    this.solidPreviewGroup = null;
+    this.fabricationGroup = null;
 
-    this.bundleModeInfo = {
-      straight: 'Straight mode draws direct links only. Use it for inspection, debugging, and very large graphs.',
-      arc: 'Arc mode adds a single lifted control point. Increase Lift for more separation; keep Samples moderate for performance.',
-      hub: 'Hub bundle routes links through high-degree hubs. Increase Hub count when the graph has multiple communities; reduce it when the result becomes noisy.',
-      legacy: 'Shortest-path legacy searches for an alternate route through the graph itself. Lower Path exponent prefers shorter local steps; lower Detour cap keeps routes tighter.'
+    this.raycaster = new THREE.Raycaster();
+    this.raycaster.params.Points.threshold = 12;
+    this.pointerNdc = new THREE.Vector2();
+
+    this.state = {
+      graph: null,
+      graphName: 'Untitled graph',
+      quality: 'interactive',
+      activeMethod: 'kde',
+      positions2D: [],
+      positions3D: [],
+      mappedPositions3D: [],
+      visibleMask: [],
+      nodeSizes: [],
+      nodeColors: [],
+      edgeColors: [],
+      rawPolylines: [],
+      rawEdgeLookup: [],
+      bundlePolylines: [],
+      bundleEdgeLookup: [],
+      bundleMetrics: null,
+      bundleRuntimeMs: 0,
+      skeletonPolylines: [],
+      skeletonStats: null,
+      selectedNodeIndex: null,
+      hoveredNodeIndex: null,
+      displayLayer: 'bundle',
+      fabricationInfo: null,
+      showNodes: true,
+      showLabels: true,
+      showGeometry: true,
+      layoutVersion: 0,
+      bundleCache: new Map(),
+      currentMode: 'load2d',
+      dragState: null,
+      suppressClick: false
     };
 
-    this.helpContent = {
-      overall: {
-        title: 'Network3D Studio guide',
-        body: `
-          <h3>Recommended workflow</h3>
-          <p>Start in <strong>Input</strong>, refine the network in <strong>2D Layout</strong>, add depth in <strong>3D Mapping</strong>, then draw or bundle edges in <strong>Edge Bundling</strong>.</p>
-          <ul>
-            <li><strong>Selection:</strong> use <strong>Ctrl + click</strong> on Windows/Linux or <strong>⌘ + click</strong> on macOS.</li>
-            <li><strong>Drag editing:</strong> in 2D, drag nodes directly to reposition them. Those moved positions are preserved in later layout runs.</li>
-            <li><strong>View panel:</strong> use the right panel for scene controls, export, edge opacity, and reset actions.</li>
-            <li><strong>Performance:</strong> reduce point budget, edge opacity, or bundling samples when large graphs feel heavy.</li>
-          </ul>
-          <p>Use the small help buttons inside each section whenever you want tuning advice for a specific control group.</p>
-        `
+    this.stepOrder = ['load2d', 'map3d', 'bundle', 'compare', 'fabricate', 'style', 'export'];
+    this.stepMeta = {
+      load2d: {
+        label: 'Step 1',
+        short: '3D mapping',
+        title: 'Load your graph and shape the 2D stage',
+        body: 'Start with one of the classic demo networks or your own graph, settle the layout, and only then move into depth, bundling, structure, styling, and fabrication.'
       },
-      input: {
-        title: 'Input formats',
-        body: `
-          <h3>Supported files</h3>
-          <p>Load either one GEXF file or a pair of CSV files for nodes and edges. Use GEXF when you want to preserve positions, sizes, colors, and extra attributes from Gephi or another network tool.</p>
-          <ul>
-            <li><strong>GEXF:</strong> best choice when the graph already contains layout, size, color, or metadata.</li>
-            <li><strong>Nodes CSV:</strong> should include <code>id</code>, and may include <code>label</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>size</code>, and <code>color</code>.</li>
-            <li><strong>Edges CSV:</strong> should include <code>source</code> and <code>target</code>, with optional <code>weight</code>.</li>
-            <li><strong>Header matching:</strong> CSV column names are case-insensitive, so capitalized Gephi exports like <code>ID</code>, <code>Source</code>, <code>Target</code>, <code>X</code>, and <code>Y</code> are accepted.</li>
-            <li><strong>Duplicate edges:</strong> repeated source-target rows are accepted. The layout engine merges them internally for ForceAtlas2 stability.</li>
-          </ul>
-          <p>Use the × buttons to remove an uploaded file and clear the current scene before loading a different network.</p>
-        `
+      map3d: {
+        label: 'Step 2',
+        short: 'Bundle',
+        title: 'Approve the 2D layout, then map it into 3D',
+        body: 'Use depth only after the planar structure is readable. Globe mode is the sapphire wrap for sculptural scenes.'
       },
-      layout2d: {
-        title: '2D layout',
-        body: `
-          <h3>How to use this step</h3>
-          <p>Start by choosing a position source. <strong>Existing positions</strong> uses coordinates already stored in the file. <strong>ForceAtlas2</strong> recomputes the layout and is usually the best option for exploratory work.</p>
-          <ul>
-            <li><strong>Scale X / Y:</strong> stretch or compress the layout horizontally or vertically without rerunning the layout.</li>
-            <li><strong>Gravity:</strong> pulls disconnected pieces toward the center.</li>
-            <li><strong>Repulsion / scaling:</strong> pushes nodes apart. Increase it when hubs overlap too much.</li>
-            <li><strong>Barnes-Hut:</strong> speeds up ForceAtlas2 for large graphs.</li>
-            <li><strong>Prevent node overlap:</strong> keeps large nodes from sitting on top of one another.</li>
-          </ul>
-          <p>Drag editing is enabled by default. To select a node, hold <strong>Ctrl</strong> or <strong>⌘</strong> and click.</p>
-        `
+      bundle: {
+        label: 'Step 3',
+        short: 'Compare',
+        title: 'Choose a bundling philosophy and tune only its own parameters',
+        body: 'Select a method, inspect the source literature, and iterate in draft or interactive quality before moving to final rendering.'
       },
-      appearance2d: {
-        title: 'Node appearance',
-        body: `
-          <h3>Size and color</h3>
-          <p>Use this section to map graph attributes into visible styling. Changes should appear immediately in 2D.</p>
-          <ul>
-            <li><strong>Node size mode:</strong> constant, degree-based, weighted degree, numeric attribute, or original imported size.</li>
-            <li><strong>Node color mode:</strong> one single color, by attribute, or original imported colors.</li>
-            <li><strong>Attribute color mode:</strong> automatically detects literal colors, numeric ramps, or categorical palettes.</li>
-          </ul>
-          <p>When a network has many edges, reduce edge opacity or move to the 3D step to inspect node colors more clearly.</p>
-        `
+      compare: {
+        label: 'Step 4',
+        short: 'Fabricate',
+        title: 'Compare methods and extract structural skeletons',
+        body: 'Use side-by-side previews and centerline extraction to decide whether you want faithfulness, flow clarity, or printable trunk structure.'
       },
-      mapping3d: {
-        title: '3D mapping',
-        body: `
-          <h3>Depth strategies</h3>
-          <p>This step keeps your 2D layout and adds a third dimension. Numeric attributes become continuous depth. Categorical attributes become discrete layers.</p>
-          <ul>
-            <li><strong>Flat:</strong> keeps the graph in 2D.</li>
-            <li><strong>Degree / weighted degree:</strong> moves important nodes away from the plane.</li>
-            <li><strong>Attribute:</strong> works for both numeric and categorical fields.</li>
-            <li><strong>Globe:</strong> wraps the current 2D layout around a sphere.</li>
-          </ul>
-          <p><strong>Z scale</strong> controls the amount of depth. <strong>Z jitter</strong> adds slight separation to reduce overlap.</p>
-        `
+      fabricate: {
+        label: 'Step 5',
+        short: 'Style',
+        title: 'Prepare a fabrication-ready physical network artifact',
+        body: 'Build rods, joints, bases, and relief variants, then evaluate fragility before exporting to your slicer workflow.'
       },
-      bundling: {
-        title: 'Edge drawing and bundling',
-        body: `
-          <h3>Choosing a technique</h3>
-          <p>Use <strong>Straight</strong> for raw inspection and very large graphs. Curved modes improve readability but require more computation.</p>
-          <ul>
-            <li><strong>Arc:</strong> simple lifted curves.</li>
-            <li><strong>Hub bundle:</strong> routes many edges through hub nodes.</li>
-            <li><strong>Shortest-path legacy:</strong> tries to reuse the network topology itself for bundled routes.</li>
-          </ul>
-          <p>For large graphs, keep samples moderate and only increase the point budget when your machine stays responsive.</p>
-        `
+      style: {
+        label: 'Step 6',
+        short: 'Export',
+        title: 'Turn the network into a scientific or artistic material',
+        body: 'Adjust background, material language, opacity, taper, and focus dimming after the structure is already settled.'
       },
-      pointBudget: {
-        title: 'Point budget',
-        body: `
-          <h3>What point budget means</h3>
-          <p>Point budget is a performance guardrail for edge rendering. Curved edges are drawn as many line segments. The point budget limits how much geometry is sent to the browser at once.</p>
-          <ul>
-            <li><strong>Lower values:</strong> faster previews and safer performance on large networks.</li>
-            <li><strong>Higher values:</strong> more edges and smoother curves, but heavier GPU and browser load.</li>
-          </ul>
-          <p>If the browser becomes slow, reduce point budget, curve samples, or opacity-heavy edge rendering.</p>
-        `
-      },
-      edgeOpacity: {
-        title: 'Edge opacity',
-        body: `
-          <h3>Controlling edge strength</h3>
-          <p>Edge opacity determines how strongly links dominate the scene. Lower opacity is better when you want to inspect node colors and structure without the edge layer washing over everything.</p>
-          <ul>
-            <li><strong>Low opacity:</strong> better for dense graphs and node inspection.</li>
-            <li><strong>Higher opacity:</strong> better for sparse graphs or when edge patterns are the main focus.</li>
-          </ul>
-          <p>Use this slider in the view panel for quick scene tuning without changing the bundling method itself.</p>
-        `
+      export: {
+        label: 'Step 7',
+        short: 'Done',
+        title: 'Save presets and export final assets',
+        body: 'Export posters, SVGs, bundle states, and reusable presets once the studio scene is finalized.'
       }
     };
 
+    this.presetStorageKey = 'network-studio-presets-v1';
+    this.dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    this.dragHit = new THREE.Vector3();
+
+    this.populateStaticUi();
     this.bindEvents();
-    this.bindRangeValueMirrors();
-    this.updateStageUI(1);
-    this.updateBundlingUI();
-    this.applyViewSettings();
+    this.setMode('load2d');
+    this.applyStylePresetUi();
+    this.updateStatus('Ready. Load a graph or choose one of the classic demo networks in Step 1.');
+    this.refreshPresetSelect();
+    this.renderEmptyState();
   }
 
   bindEvents() {
-    getEl('loadGraphBtn').addEventListener('click', () => this.handleLoadGraph());
-    getEl('clearGexfFileBtn').addEventListener('click', () => this.clearFileAndScene('gexfFile'));
-    getEl('clearNodesCsvFileBtn').addEventListener('click', () => this.clearFileAndScene('nodesCsvFile'));
-    getEl('clearEdgesCsvFileBtn').addEventListener('click', () => this.clearFileAndScene('edgesCsvFile'));
-    getEl('apply2DBtn').addEventListener('click', () => this.run2D(false));
-    getEl('finalize2DBtn').addEventListener('click', () => this.run2D(true));
-    getEl('apply3DBtn').addEventListener('click', () => this.run3D(false));
-    getEl('finalize3DBtn').addEventListener('click', () => this.run3D(true));
-    getEl('backTo2DBtn').addEventListener('click', () => {
-      this.state.activeView = '2d';
-      this.updateStageUI(2);
-      this.renderCurrentView(true);
-    });
-    getEl('backTo3DBtn').addEventListener('click', () => {
-      this.state.activeView = this.state.positions3D.length ? '3d' : '2d';
-      this.updateStageUI(3);
-      this.renderCurrentView(true);
-    });
-
-    getEl('drawEdgesBtn').addEventListener('click', () => this.drawEdges());
-    getEl('clearEdgesBtn').addEventListener('click', () => {
-      this.drawPreviewEdges();
-      this.setStatus('Edge layer reset to preview.');
-      this.sceneController.render();
-    });
-
-    getEl('backgroundColor').addEventListener('input', () => this.applyViewSettings());
-    getEl('nodeDetail').addEventListener('change', () => this.renderNodes());
-    getEl('showLabels').addEventListener('change', () => this.renderLabels());
-    getEl('labelCount').addEventListener('input', () => this.renderLabels());
-    getEl('labelSize').addEventListener('input', () => this.renderLabels());
-
-    [
-      'scaleX', 'scaleY', 'layoutGravity', 'layoutRepulsion',
-      'nodeSizeMode', 'nodeSizeAttribute', 'nodeSizeMin', 'nodeSizeMax', 'nodeSizeScale',
-      'nodeColorMode', 'nodeColorAttribute', 'nodeSingleColor', 'nodeRampColor',
-      'fa2BarnesHut', 'fa2AdjustSizes', 'fa2Outbound', 'fa2LinLog'
-    ].forEach((id) => {
-      const el = getEl(id);
-      el.addEventListener(['range', 'color', 'number'].includes(el.type) ? 'input' : 'change', () => this.apply2DVisualPreview());
-    });
-
-    ['zMode', 'zAttribute', 'zScale', 'zJitter', 'zCategoryGap'].forEach((id) => {
-      const el = getEl(id);
-      el.addEventListener(['range', 'number'].includes(el.type) ? 'input' : 'change', () => this.run3D(false));
-    });
-
-    ['edgeMode', 'bundleSamples', 'bundleHubCount', 'bundleLift', 'bundleDetour', 'legacyExponent', 'legacyExcludeDirect'].forEach((id) => {
-      const el = getEl(id);
-      el.addEventListener((el.type === 'range' || el.type === 'checkbox' || el.type === 'number') ? 'input' : 'change', () => {
-        if (id === 'edgeMode') this.updateBundlingUI();
-        this.setStatus('Bundling parameters updated. Click Draw edges to apply them.');
-      });
-    });
-
-    ['edgeColorMode', 'edgeSingleColor', 'edgeOpacity'].forEach((id) => {
-      const el = getEl(id);
-      el.addEventListener((el.type === 'range' || el.type === 'color') ? 'input' : 'change', () => {
-        this.syncEdgeOpacityControls('stage');
-        this.redrawCurrentEdgeAppearance();
-      });
-    });
-
-    const viewEdgeOpacity = getEl('viewEdgeOpacity');
-    if (viewEdgeOpacity) {
-      viewEdgeOpacity.addEventListener('input', () => {
-        this.syncEdgeOpacityControls('view');
-        this.redrawCurrentEdgeAppearance();
-      });
-    }
-
-    [...document.querySelectorAll('[data-help-key]')].forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.showHelp(button.dataset.helpKey);
-      });
-    });
-    getEl('closeHelpModalBtn')?.addEventListener('click', () => this.hideHelp());
-    this.dom.helpModal?.addEventListener('click', (event) => {
-      if (event.target === this.dom.helpModal) this.hideHelp();
-    });
-    window.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') this.hideHelp();
-    });
-
-    getEl('fitViewBtn').addEventListener('click', () => this.sceneController.fitToPositions(this.visiblePositions()));
-    getEl('resetSceneBtn').addEventListener('click', () => this.resetScene());
-    getEl('exportSceneBtn').addEventListener('click', () => this.exportScene());
-    getEl('hideViewPanelBtn').addEventListener('click', () => this.setViewPanelVisible(false));
-    getEl('showViewPanelBtn').addEventListener('click', () => this.setViewPanelVisible(true));
-
-    getEl('toggleSidebarBtn').addEventListener('click', () => {
-      const sidebar = getEl('sidebar');
-      sidebar.classList.toggle('collapsed');
-      getEl('toggleSidebarBtn').textContent = sidebar.classList.contains('collapsed') ? 'Show' : 'Hide';
+    this.dom.toggleLeftRailBtn?.addEventListener('click', () => {
+      this.dom.leftRail?.classList.toggle('collapsed');
+      this.dom.workspace?.classList.toggle('left-collapsed');
       this.sceneController.resize();
     });
 
-    [...document.querySelectorAll('.stage-btn')].forEach((button) => {
-      button.addEventListener('click', () => {
-        const stage = Number(button.dataset.stageTarget);
-        if (button.disabled) return;
-        this.updateStageUI(stage);
-        if (stage <= 2) this.state.activeView = '2d';
-        else if (this.state.positions3D.length) this.state.activeView = '3d';
-        this.renderCurrentView(true);
-      });
+    this.dom.toggleRightRailBtn?.addEventListener('click', () => {
+      this.dom.rightRail?.classList.toggle('collapsed');
+      this.dom.workspace?.classList.toggle('right-collapsed');
+      const collapsed = this.dom.rightRail?.classList.contains('collapsed');
+      if (this.dom.toggleRightRailBtn) this.dom.toggleRightRailBtn.textContent = collapsed ? 'Guide' : 'Collapse';
+      this.sceneController.resize();
     });
 
-
-    this.dom.canvas.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
-    window.addEventListener('pointermove', (event) => this.handlePointerMove(event));
-    window.addEventListener('pointerup', (event) => this.handlePointerUp(event));
-    this.dom.canvas.addEventListener('click', (event) => {
-      if (this.suppressClick) { this.suppressClick = false; return; }
-      if (this.state.dragState && this.state.dragState.moved) return;
-      this.handleSceneClick(event);
+    this.dom.modeTabs.forEach((tab) => {
+      tab.addEventListener('click', () => this.setMode(tab.dataset.mode));
     });
-    this.dom.canvas.addEventListener('mouseleave', () => {
-      if (!this.state.dragState) this.setHoveredNode(null);
-      this.hideTooltip();
+
+    this.dom.prevStepBtn?.addEventListener('click', () => this.goStep(-1));
+    this.dom.nextStepBtn?.addEventListener('click', () => this.goStep(1));
+
+    this.dom.sceneToolsCollapseBtn?.addEventListener('click', () => {
+      this.dom.sceneToolsPanel?.classList.toggle('collapsed');
+      const collapsed = this.dom.sceneToolsPanel?.classList.contains('collapsed');
+      if (this.dom.sceneToolsCollapseBtn) this.dom.sceneToolsCollapseBtn.textContent = collapsed ? '⟩' : '⟨';
+      this.sceneController.resize();
     });
-  }
 
-  bindRangeValueMirrors() {
-    const defs = [
-      ['scaleX', 'scaleXValue', 1], ['scaleY', 'scaleYValue', 1],
-      ['layoutGravity', 'layoutGravityValue', 2], ['layoutRepulsion', 'layoutRepulsionValue', 1],
-      ['nodeSizeScale', 'nodeSizeScaleValue', 2], ['zScale', 'zScaleValue', 1], ['zJitter', 'zJitterValue', 1], ['zCategoryGap', 'zCategoryGapValue', 1],
-      ['edgeOpacity', 'edgeOpacityValue', 2], ['bundleLift', 'bundleLiftValue', 1], ['bundleDetour', 'bundleDetourValue', 1],
-      ['legacyExponent', 'legacyExponentValue', 1]
-    ];
-    defs.forEach(([inputId, valueId, decimals]) => {
-      const input = getEl(inputId);
-      const label = getEl(valueId);
-      const sync = () => { label.textContent = formatValue(input.value, decimals); };
-      input.addEventListener('input', sync);
-      sync();
+    // Network details modal (Step 7)
+    this.dom.openNetworkDetailsBtn?.addEventListener('click', () => this.setNetworkDetailsModal(true));
+    this.dom.closeNetworkDetailsBtn?.addEventListener('click', () => this.setNetworkDetailsModal(false));
+    this.dom.networkDetailsModal?.addEventListener('click', (event) => {
+      const target = event.target;
+      if (target?.dataset?.modalClose) this.setNetworkDetailsModal(false);
     });
-    this.syncEdgeOpacityControls('stage');
-  }
-
-  setStatus(text) { this.dom.statusText.textContent = text; }
-
-  setStats() {
-    const graph = this.state.graph;
-    const visibleCount = this.state.visibleMask?.length ? this.state.visibleMask.filter(Boolean).length : 0;
-    this.dom.statsText.textContent = graph
-      ? `Nodes: ${graph.nodes.length.toLocaleString()} (${visibleCount.toLocaleString()} visible) · Edges: ${graph.edges.length.toLocaleString()}`
-      : 'Nodes: 0 · Edges: 0';
-  }
-
-  isSelectionModifier(event) {
-    return !!(event?.ctrlKey || event?.metaKey);
-  }
-
-  isDragEditEnabled() {
-    const el = getEl('dragEditMode');
-    return el ? el.checked : true;
-  }
-
-  isLegendEnabled() {
-    const el = getEl('showLegend');
-    return el ? el.checked : true;
-  }
-
-  showHelp(key) {
-    const entry = this.helpContent[key];
-    if (!entry || !this.dom.helpModal) return;
-    this.dom.helpModalTitle.textContent = entry.title;
-    this.dom.helpModalBody.innerHTML = entry.body;
-    this.dom.helpModal.classList.remove('hidden');
-  }
-
-  hideHelp() {
-    this.dom.helpModal?.classList.add('hidden');
-  }
-
-  syncEdgeOpacityControls(source = 'stage') {
-    const stageInput = getEl('edgeOpacity');
-    const viewInput = getEl('viewEdgeOpacity');
-    const viewLabel = getEl('viewEdgeOpacityValue');
-    if (!stageInput || !viewInput) return;
-    if (source === 'view') stageInput.value = viewInput.value;
-    else viewInput.value = stageInput.value;
-    if (viewLabel) viewLabel.textContent = formatValue(stageInput.value, 2);
-  }
-
-  collapseStageSections(stage) {
-    const panel = document.querySelector(`.stage-panel[data-stage="${stage}"]`);
-    if (!panel) return;
-    const details = [...panel.querySelectorAll('details.section-card')];
-    if (!details.length) return;
-    details.forEach((detail, index) => {
-      detail.open = index === 0;
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.setNetworkDetailsModal(false);
     });
-  }
 
-  setViewPanelVisible(visible) {
-    this.dom.viewPanel.classList.toggle('is-hidden', !visible);
-    this.dom.showViewPanelBtn.classList.toggle('hidden', visible);
-    this.sceneController.resize();
-  }
-
-  showProgress(title) {
-    this.dom.progressTitle.textContent = title;
-    this.dom.progressBar.value = 0;
-    this.dom.progressValue.textContent = '0%';
-    this.dom.progressOverlay.classList.remove('hidden');
-  }
-
-  setProgress(percent) {
-    const value = Math.max(0, Math.min(100, Math.round(percent)));
-    this.dom.progressBar.value = value;
-    this.dom.progressValue.textContent = `${value}%`;
-  }
-
-  hideProgress() { this.dom.progressOverlay.classList.add('hidden'); }
-
-  clearFileAndScene(inputId) {
-    const input = getEl(inputId);
-    if (input) input.value = '';
-    this.clearLoadedGraph();
-  }
-
-  clearLoadedGraph() {
-    this.state.graph = null;
-    this.state.base2DPositions = [];
-    this.state.positions2D = [];
-    this.state.positions3D = [];
-    this.state.nodeSizes = [];
-    this.state.nodeColors = [];
-    this.state.nodeColorMeta = null;
-    this.state.nodeSizeMeta = null;
-    this.state.activeView = '2d';
-    this.state.selectedNodeIndex = null;
-    this.state.hoveredNodeIndex = null;
-    this.state.edgeLayer = { kind: 'preview', edgeIndexes: [] };
-    this.state.pinnedNodes = new Set();
-    this.state.pinnedBasePositions = [];
-    this.state.visibleMask = [];
-    this.state.screenNodeCache = [];
-    this.nodeRenderer.dispose();
-    this.edgeRenderer.clear();
-    this.labelRenderer.clear();
-    this.hideTooltip();
-    this.dom.nodeInfoPanel.classList.add('hidden');
-    this.dom.nodeInfoContent.innerHTML = '';
-    this.enableStage(2, false);
-    this.enableStage(3, false);
-    this.enableStage(4, false);
-    this.updateStageUI(1);
-    this.setStats();
-    this.updateLegend();
-    this.sceneController.fitToPositions([{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 80 }]);
-    this.setStatus('Scene cleared. Load a graph to begin.');
-  }
-
-  updateStageUI(stage) {
-    this.state.stage = stage;
-    [...document.querySelectorAll('.stage-panel')].forEach((panel) => {
-      panel.classList.toggle('hidden', Number(panel.dataset.stage) !== stage);
+    this.dom.detailsToggleBtn?.addEventListener('click', () => {
+      this.dom.detailsDrawer?.classList.toggle('collapsed');
+      const expanded = !this.dom.detailsDrawer?.classList.contains('collapsed');
+      this.dom.detailsToggleBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      const icon = this.dom.detailsToggleBtn.querySelector('.details-toggle-icon');
+      if (icon) icon.textContent = expanded ? '↑' : '↓';
     });
-    [...document.querySelectorAll('.stage-btn')].forEach((button) => {
-      const buttonStage = Number(button.dataset.stageTarget);
-      button.classList.toggle('active', buttonStage === stage);
+
+    this.dom.loadDemoGraphBtn?.addEventListener('click', () => this.loadDemoGraph());
+    this.dom.loadGraphBtn.addEventListener('click', () => this.loadUploadedGraph());
+    this.dom.fitViewBtn.addEventListener('click', () => this.fitScene());
+    this.dom.centerDraggedLayoutBtn?.addEventListener('click', () => {
+      if (!this.state.positions2D.length) return;
+      this.state.positions2D = recenterPositions(this.state.positions2D);
+      this.state.layoutVersion += 1;
+      this.applyDepthMapping();
+      this.invalidateDerivedStates({ clearCache: true, clearFabrication: true, switchToRaw: true });
+      this.refreshEncodingsAndLayers();
+      this.fitScene();
+      this.updateStatus('Recentered the edited 2D layout. Any derived bundle or fabrication layers were reset to stay consistent.');
     });
-  }
 
-  enableStage(stage, enabled = true) {
-    const button = [...document.querySelectorAll('.stage-btn')].find((item) => Number(item.dataset.stageTarget) === stage);
-    if (button) button.disabled = !enabled;
-  }
-
-  updateBundlingUI() {
-    const mode = getEl('edgeMode').value;
-    [...document.querySelectorAll('.bundle-group')].forEach((el) => {
-      const modes = String(el.dataset.mode || '').split(/\s+/).filter(Boolean);
-      el.classList.toggle('hidden', !modes.includes(mode));
-    });
-    getEl('edgeTuningInfo').textContent = this.bundleModeInfo[mode] || '';
-  }
-
-  getAllPresetIds() {
-    return [
-      'positionSource', 'layoutIterations', 'scaleX', 'scaleY', 'layoutGravity', 'layoutRepulsion',
-      'fa2BarnesHut', 'fa2AdjustSizes', 'fa2Outbound', 'fa2LinLog',
-      'nodeSizeMode', 'nodeSizeAttribute', 'nodeSizeMin', 'nodeSizeMax', 'nodeSizeScale',
-      'nodeColorMode', 'nodeColorAttribute', 'nodeSingleColor', 'nodeRampColor',
-      'zMode', 'zAttribute', 'zScale', 'zJitter', 'zCategoryGap',
-      'edgeMode', 'edgeColorMode', 'edgeSingleColor', 'edgeOpacity', 'bundleSamples', 'bundleHubCount', 'bundleLift', 'bundleDetour', 'legacyExponent', 'legacyExcludeDirect',
-      'backgroundColor', 'nodeDetail', 'showLabels', 'labelCount', 'labelSize', 'pointBudget', 'exportScale', 'transparentExport'
-    ];
-  }
-
-  readCurrentPreset() {
-    const controls = {};
-    for (const id of this.getAllPresetIds()) {
-      const el = getEl(id);
-      if (!el) continue;
-      controls[id] = el.type === 'checkbox' ? el.checked : el.value;
-    }
-    return {
-      controls,
-      pinnedNodes: Array.from(this.state.pinnedNodes),
-      pinnedBasePositions: this.state.pinnedBasePositions,
-      camera: {
-        position: this.sceneController.camera.position.toArray(),
-        target: this.sceneController.controls.target.toArray()
+    this.dom.applyLayoutBtn.addEventListener('click', async () => {
+      const prevVersion = this.state.layoutVersion;
+      await this.applyLayout();
+      if (this.state.layoutVersion !== prevVersion) {
+        this.applyDepthMapping();
+        this.invalidateDerivedStates({ clearCache: true, clearFabrication: true, switchToRaw: true });
       }
+      this.refreshEncodingsAndLayers();
+      this.fitScene();
+    });
+
+    this.dom.applyDepthBtn.addEventListener('click', () => {
+      this.applyDepthMapping();
+      this.invalidateDerivedStates({ clearCache: true, clearFabrication: true, switchToRaw: true });
+      this.refreshEncodingsAndLayers();
+      this.fitScene();
+    });
+
+    this.dom.applyFilterBtn.addEventListener('click', () => {
+      this.refreshEncodingsAndLayers();
+      this.fitScene();
+    });
+
+    this.dom.applyNodeAppearanceBtn?.addEventListener('click', () => {
+      this.refreshEncodingsAndLayers();
+      this.updateStatus('Updated node size and color encodings.');
+    });
+
+    this.dom.filterAttr.addEventListener('change', () => this.populateFilterValues());
+    this.dom.runBundlingBtn.addEventListener('click', async () => this.runSelectedBundling());
+    this.dom.extractSkeletonBtn.addEventListener('click', () => this.runSkeletonExtraction());
+    this.dom.displayLayer.addEventListener('change', () => {
+      this.state.displayLayer = this.dom.displayLayer.value;
+      this.syncQuickSceneTools();
+      this.refreshVisibleLayer();
+    });
+    this.dom.quickDisplayLayer?.addEventListener('change', () => {
+      this.dom.displayLayer.value = this.dom.quickDisplayLayer.value;
+      this.state.displayLayer = this.dom.displayLayer.value;
+      this.refreshVisibleLayer();
+    });
+    this.dom.quickBackgroundColor?.addEventListener('input', () => {
+      this.dom.backgroundColor.value = this.dom.quickBackgroundColor.value;
+      const color = this.dom.quickBackgroundColor.value || getStylePreset(this.dom.stylePreset.value).background;
+      this.sceneController.setBackground(color);
+      document.documentElement.style.setProperty('--studio-bg', color);
+    });
+    this.dom.quickEdgeOpacity?.addEventListener('input', () => {
+      this.dom.edgeOpacity.value = this.dom.quickEdgeOpacity.value;
+      this.refreshVisibleLayer();
+    });
+    this.dom.quickShowNodes?.addEventListener('change', () => {
+      this.state.showNodes = !!this.dom.quickShowNodes.checked;
+      this.renderNodes();
+      this.refreshVisibleLayer();
+    });
+    this.dom.quickShowLabels?.addEventListener('change', () => {
+      this.state.showLabels = !!this.dom.quickShowLabels.checked;
+      this.refreshEncodingsAndLayers();
+    });
+    this.dom.quickShowGeometry?.addEventListener('change', () => {
+      this.state.showGeometry = !!this.dom.quickShowGeometry.checked;
+      this.refreshVisibleLayer();
+    });
+    this.dom.applyStyleBtn.addEventListener('click', () => {
+      this.applyStylePresetUi();
+      this.refreshEncodingsAndLayers();
+      this.updateStatus('Applied style and background changes.');
+    });
+    this.dom.stylePreset.addEventListener('change', () => {
+      this.applyStylePresetUi(true);
+      this.refreshEncodingsAndLayers();
+    });
+    this.dom.backgroundColor?.addEventListener('input', () => {
+      const color = this.dom.backgroundColor.value || getStylePreset(this.dom.stylePreset.value).background;
+      if (this.dom.quickBackgroundColor) this.dom.quickBackgroundColor.value = color;
+      this.sceneController.setBackground(color);
+      document.documentElement.style.setProperty('--studio-bg', color);
+    });
+    this.dom.edgeOpacity?.addEventListener('input', () => {
+      if (this.dom.quickEdgeOpacity) this.dom.quickEdgeOpacity.value = this.dom.edgeOpacity.value;
+      this.refreshVisibleLayer();
+    });
+    this.dom.resetBackgroundBtn?.addEventListener('click', () => {
+      this.dom.backgroundColor.value = getStylePreset(this.dom.stylePreset.value).background;
+      this.applyStylePresetUi(true);
+      this.refreshEncodingsAndLayers();
+    });
+
+    this.dom.buildFabricationBtn.addEventListener('click', () => this.buildFabricationPreview());
+    this.dom.clearFabricationBtn.addEventListener('click', () => this.clearFabricationPreview());
+    this.dom.exportStlBtn.addEventListener('click', () => this.exportFabrication('stl'));
+    this.dom.exportObjBtn.addEventListener('click', () => this.exportFabrication('obj'));
+    this.dom.exportGlbBtn.addEventListener('click', () => this.exportFabrication('glb'));
+
+    this.dom.runCompareBtn.addEventListener('click', async () => this.runComparisonBoard());
+
+    this.dom.cameraIsoBtn.addEventListener('click', () => this.setCameraPreset('iso'));
+    this.dom.cameraTopBtn.addEventListener('click', () => this.setCameraPreset('top'));
+    this.dom.cameraSideBtn.addEventListener('click', () => this.setCameraPreset('side'));
+    this.dom.savePresetBtn.addEventListener('click', () => this.savePreset());
+    this.dom.loadPresetBtn.addEventListener('click', () => this.loadPreset());
+    this.dom.deletePresetBtn.addEventListener('click', () => this.deletePreset());
+    this.dom.exportPngBtn.addEventListener('click', () => this.exportPng());
+    this.dom.exportSvgBtn.addEventListener('click', () => this.exportSvg());
+    this.dom.exportStateBtn.addEventListener('click', () => this.exportState());
+
+    this.dom.viewport.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
+    this.dom.viewport.addEventListener('pointermove', (event) => this.handlePointerMove(event));
+    this.dom.viewport.addEventListener('pointerup', (event) => this.handlePointerUp(event));
+    this.dom.viewport.addEventListener('pointerleave', () => this.handlePointerLeave());
+    this.dom.viewport.addEventListener('click', () => {
+      if (this.state.suppressClick) {
+        this.state.suppressClick = false;
+        return;
+      }
+      this.commitSelectionFromHover();
+    });
+  }
+
+  populateStaticUi() {
+    setOptions(this.dom.stylePreset, Object.keys(STYLE_PRESETS), { selected: 'scientific-dark' });
+    setOptions(this.dom.compareLeft, METHOD_LIBRARY.map((m) => m.id), { selected: 'kde' });
+    setOptions(this.dom.compareRight, METHOD_LIBRARY.map((m) => m.id), { selected: 'mingle' });
+
+    this.dom.methodCards.innerHTML = '';
+    METHOD_LIBRARY.forEach((method) => {
+      const card = document.createElement('button');
+      card.className = `method-card ${method.id === this.state.activeMethod ? 'active' : ''}`;
+      card.dataset.methodId = method.id;
+      card.innerHTML = `
+        <div class="method-card-top">
+          <span class="method-family">${htmlEscape(method.family)}</span>
+          <span class="method-status">${htmlEscape(method.status)}</span>
+        </div>
+        <div class="method-name">${htmlEscape(method.name)}</div>
+        <div class="method-badge">${htmlEscape(method.sourceBadge)}</div>
+      `;
+      card.addEventListener('click', () => {
+        this.state.activeMethod = method.id;
+        this.updateMethodSelectionUi();
+      });
+      this.dom.methodCards.appendChild(card);
+    });
+    this.updateMethodSelectionUi();
+    this.dom.backgroundColor.value = getStylePreset('scientific-dark').background;
+
+    this.dom.referenceDrawer.innerHTML = Object.values(REFERENCE_LIBRARY)
+      .sort((a, b) => b.year - a.year)
+      .map((ref) => `
+        <article class="reference-card">
+          <div class="reference-year">${ref.year}</div>
+          <div class="reference-body">
+            <h3>${htmlEscape(ref.title)}</h3>
+            <div class="muted">${htmlEscape(ref.authors)}</div>
+            <p>${htmlEscape(ref.why)}</p>
+            <a href="${htmlEscape(ref.link)}" target="_blank" rel="noreferrer">Open source</a>
+          </div>
+        </article>
+      `)
+      .join('');
+  }
+
+  updateMethodSelectionUi() {
+    const method = getMethodById(this.state.activeMethod);
+    Array.from(this.dom.methodCards.querySelectorAll('.method-card')).forEach((card) => {
+      card.classList.toggle('active', card.dataset.methodId === method.id);
+    });
+    const refs = (method.references || []).map((refId) => REFERENCE_LIBRARY[refId]).filter(Boolean);
+    this.dom.methodDetail.innerHTML = `
+      <div class="method-detail-head">
+        <div>
+          <div class="eyebrow">${htmlEscape(method.family)}</div>
+          <h3>${htmlEscape(method.name)}</h3>
+        </div>
+        <div class="chip">${htmlEscape(method.sourceBadge)}</div>
+      </div>
+      <p>${htmlEscape(method.intuition)}</p>
+      <div class="method-grid">
+        <div><strong>Strengths</strong><p>${htmlEscape(method.strengths)}</p></div>
+        <div><strong>Weaknesses</strong><p>${htmlEscape(method.weaknesses)}</p></div>
+        <div><strong>Tradeoffs</strong><p>${htmlEscape(method.tradeoffs)}</p></div>
+        <div><strong>Parameters</strong><p>${htmlEscape((method.params || []).join(', ') || 'Fixed baseline')}</p></div>
+      </div>
+      <div class="method-ref-list">
+        ${(refs.length ? refs : [{ title: 'No external citation', authors: 'Built-in baseline', year: '', why: 'Used as the uncluttered reference view.', link: '#' }]).map((ref) => `
+          <div class="ref-pill">
+            <div class="ref-pill-title">${htmlEscape(ref.title)}</div>
+            <div class="ref-pill-meta">${htmlEscape(ref.authors)} ${ref.year ? `· ${ref.year}` : ''}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    this.updateMethodParameterVisibility(method);
+  }
+
+  updateMethodParameterVisibility(method = getMethodById(this.state.activeMethod)) {
+    const guide = {
+      straight: 'Use this as the uncluttered baseline. It is the best way to verify raw topology before bundling.',
+      arc: 'Lift adds vertical separation. Increase it when you want elegant 3D arcs without strong corridor formation.',
+      hub: 'Hub count controls how many corridor anchors exist. Fewer hubs yield stronger mediation and more stylized central corridors.',
+      legacy: 'Detour cap and exponent control how adventurous path rerouting becomes. Keep them moderate if fidelity matters.',
+      kde: 'Grid and iterations set the smoothness of the flow field. Higher values create cleaner corridors but cost more time.',
+      mingle: 'Cluster count decides how many shared spines can form. Fewer clusters create more dramatic aggregation.',
+      divided: 'Direction split separates opposing flows into lanes. Increase it when directional reading matters more than compactness.',
+      layered: 'Choose a meaningful categorical attribute. Layer gap preserves semantic separation during weaving.',
+      space3d: 'Use this when depth is part of the structure, not just decoration. Cluster count and lift jointly shape volumetric corridors.'
+    };
+    const paramHelp = {
+      samples: 'How many control samples are used along each edge. Higher values make curves smoother but more expensive.',
+      iterations: 'How many refinement passes the method performs. More passes usually mean tighter or cleaner bundles, but longer runtime.',
+      strength: 'How strongly edges are pulled toward shared corridors. Increase for stronger aggregation; reduce for more fidelity to the raw routes.',
+      lift: 'How much the bundle is lifted or arced away from the raw layout plane. Useful for airy 3D separation and sculptural emphasis.',
+      clusterCount: 'How many corridor groups or bundle spines the method is allowed to form. Fewer clusters create broader trunks; more clusters preserve local detail.',
+      hubCount: 'How many high-traffic relay hubs can mediate paths. Lower values centralize the flow; higher values distribute it.',
+      detourCap: 'Upper bound on how far rerouted paths are allowed to deviate from the direct connection. Higher values encourage shared routes but inflate path length.',
+      exponent: 'Bias applied to legacy rerouting. Larger values emphasize strong corridors and suppress weaker alternatives.',
+      directionSplit: 'Separates opposing directions into adjacent lanes. Increase it when directional readability is more important than maximum compactness.',
+      grid: 'Resolution of the density or vector field used by image-space approximations. Higher grid sizes create cleaner corridors but need more computation and memory.',
+      layerAttr: 'Categorical attribute used to keep bundles separated into semantic layers. Choose an attribute that represents communities, time slices, or strata.',
+      layerGap: 'Distance preserved between attribute layers. Higher values make layers easier to read but expand the scene.'
+    };
+    const paramSet = new Set(method.params || []);
+    this.dom.bundleParamFields.forEach((field) => {
+      const isVisible = paramSet.has(field.dataset.param);
+      field.classList.toggle('hidden', !isVisible);
+      let help = field.querySelector('.field-help');
+      if (!help) {
+        help = document.createElement('div');
+        help.className = 'field-help';
+        field.appendChild(help);
+      }
+      help.textContent = isVisible ? (paramHelp[field.dataset.param] || 'Method-specific tuning control.') : '';
+      field.title = paramHelp[field.dataset.param] || '';
+    });
+    if (this.dom.bundleParameterHelp) {
+      const visibleHelp = (method.params || []).map((param) => `<li><strong>${htmlEscape(param)}</strong>: ${htmlEscape(paramHelp[param] || 'Method-specific tuning control.')}</li>`).join('');
+      this.dom.bundleParameterHelp.innerHTML = `
+        <div class="hint-block">
+          ${htmlEscape(guide[method.id] || 'Adjust the visible controls and rerun the method to compare bundle behavior.')}
+          <div class="top-gap">Source indicator: <strong>${htmlEscape(method.sourceBadge)}</strong>.</div>
+        </div>
+        ${visibleHelp ? `<div class="hint-block top-gap"><strong>Visible parameters</strong><ul class="hint-list">${visibleHelp}</ul></div>` : ''}
+      `;
+    }
+  }
+
+  toggleHud(cardId) {
+    const card = this.dom[cardId] || getEl(cardId);
+    if (!card) return;
+    this.setHudVisible(cardId, card.classList.contains('hidden'));
+  }
+
+  setHudVisible(cardId, visible = true) {
+    const card = this.dom[cardId] || getEl(cardId);
+    if (!card) return;
+    card.classList.toggle('hidden', !visible);
+  }
+
+  syncQuickSceneTools() {
+    if (this.dom.quickDisplayLayer) this.dom.quickDisplayLayer.value = this.dom.displayLayer.value;
+    if (this.dom.quickBackgroundColor && this.dom.backgroundColor) this.dom.quickBackgroundColor.value = this.dom.backgroundColor.value;
+    if (this.dom.quickEdgeOpacity && this.dom.edgeOpacity) this.dom.quickEdgeOpacity.value = this.dom.edgeOpacity.value;
+    if (this.dom.quickShowNodes) this.dom.quickShowNodes.checked = !!this.state.showNodes;
+    if (this.dom.quickShowLabels) this.dom.quickShowLabels.checked = !!this.state.showLabels;
+    if (this.dom.quickShowGeometry) this.dom.quickShowGeometry.checked = !!this.state.showGeometry;
+  }
+
+  computeAvailableLayers() {
+    return {
+      raw: !!this.state.rawPolylines.length,
+      bundle: !!this.state.bundlePolylines.length,
+      skeleton: !!this.state.skeletonPolylines.length,
+      fabrication: !!this.fabricationGroup
     };
   }
 
-  applyPresetControls(preset) {
-    if (!preset) return;
-    for (const [id, value] of Object.entries(preset.controls || {})) {
-      const el = getEl(id);
-      if (!el) continue;
-      if (el.type === 'checkbox') el.checked = !!value;
-      else el.value = value;
-    }
-    this.state.pinnedNodes = new Set((preset.pinnedNodes || []).map((v) => Number(v)));
-    this.state.pinnedBasePositions = preset.pinnedBasePositions || [];
-    if (preset.camera?.position && preset.camera?.target) {
-      this.sceneController.camera.position.fromArray(preset.camera.position);
-      this.sceneController.controls.target.fromArray(preset.camera.target);
-      this.sceneController.render();
+  renderLayerAvailability() {
+    const available = this.computeAvailableLayers();
+    const html = ['raw', 'bundle', 'skeleton', 'fabrication'].map((layer) => {
+      const active = this.state.displayLayer === layer;
+      const enabled = available[layer] || layer === 'raw';
+      const label = layer === 'raw' ? 'Raw' : layer === 'bundle' ? 'Bundle' : layer === 'skeleton' ? 'Skeleton' : 'Fabrication';
+      return `<button class="layer-chip ${active ? 'active' : ''} ${enabled ? '' : 'disabled'}" data-layer-chip="${layer}" ${enabled ? '' : 'disabled'}>${label}</button>`;
+    }).join('');
+    if (this.dom.layerAvailability) {
+      this.dom.layerAvailability.innerHTML = html;
+      Array.from(this.dom.layerAvailability.querySelectorAll('[data-layer-chip]')).forEach((btn) => {
+        btn.addEventListener('click', () => {
+          this.dom.displayLayer.value = btn.dataset.layerChip;
+          this.state.displayLayer = btn.dataset.layerChip;
+          this.syncQuickSceneTools();
+          this.refreshVisibleLayer();
+        });
+      });
     }
   }
 
-  getSavedPresets() {
+  setMode(mode) {
+    const safeMode = this.stepOrder.includes(mode) ? mode : this.stepOrder[0];
+    const previousMode = this.state.currentMode;
+    this.state.currentMode = safeMode;
+    this.dom.modeTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.mode === safeMode));
+    this.dom.modePanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.modePanel === safeMode));
+
+    const meta = this.stepMeta[safeMode] || {};
+    if (this.dom.currentStepLabel) this.dom.currentStepLabel.textContent = meta.label || 'Step';
+    if (this.dom.currentStepTitle) this.dom.currentStepTitle.textContent = meta.title || 'Studio step';
+    if (this.dom.currentStepBody) this.dom.currentStepBody.textContent = meta.body || '';
+
+    const index = this.stepOrder.indexOf(safeMode);
+    if (this.dom.prevStepBtn) this.dom.prevStepBtn.disabled = index <= 0;
+    if (this.dom.nextStepBtn) this.dom.nextStepBtn.disabled = index >= this.stepOrder.length - 1;
+    if (this.dom.nextStepBtn) this.dom.nextStepBtn.textContent = '→';
+    if (this.dom.prevStepBtn) this.dom.prevStepBtn.textContent = '←';
+
+    if (this.state.graph) {
+      if (safeMode === 'map3d' && previousMode !== 'map3d') {
+        this.applyDepthMapping();
+      }
+      if (safeMode === 'load2d') {
+        this.dom.displayLayer.value = 'raw';
+        this.state.displayLayer = 'raw';
+      }
+      this.refreshEncodingsAndLayers();
+      if (safeMode === 'load2d' && previousMode !== 'load2d') {
+        this.updateStatus('2D stage active. Adjust the layout, filters, node encodings, and labels before moving on. Only valid scene states remain available.');
+      }
+      if (safeMode === 'map3d' && previousMode !== 'map3d') {
+        this.updateStatus('3D mapping stage active. Tune the depth strategy, then continue into bundling.');
+      }
+    }
+
+    this.sceneController.resize();
+  }
+
+  goStep(direction = 1) {
+    const index = this.stepOrder.indexOf(this.state.currentMode);
+    const nextIndex = Math.max(0, Math.min(this.stepOrder.length - 1, index + direction));
+    this.setMode(this.stepOrder[nextIndex]);
+  }
+
+  setProgress(title = 'Working…', percent = 0, visible = true) {
+    this.dom.progressTitle.textContent = title;
+    this.dom.progressBar.value = percent;
+    this.dom.progressValue.textContent = `${Math.round(percent)}%`;
+    this.dom.progressOverlay.classList.toggle('hidden', !visible);
+  }
+
+  updateStatus(text, extra = null) {
+    this.dom.statusText.textContent = text;
+    if (extra != null) this.dom.statusStats.textContent = extra;
+  }
+
+  renderEmptyState() {
+    this.dom.overviewStats.innerHTML = 'Load a graph to inspect bundle methods, skeletons, and fabrication geometry.';
+    this.dom.selectionContent.innerHTML = 'Hover or click a node to inspect metadata.';
+    this.dom.bundleMetrics.innerHTML = 'No bundle has been computed yet.';
+    this.dom.layerContent.innerHTML = 'Display layer: raw graph.';
+    this.dom.skeletonStats.innerHTML = 'No skeleton extracted yet.';
+    this.dom.printabilityPanel.innerHTML = 'Build a physical model to see printability hints.';
+    this.syncQuickSceneTools();
+    this.renderLayerAvailability();
+  }
+
+  setNetworkDetailsModal(isOpen) {
+    const modal = this.dom.networkDetailsModal;
+    if (!modal) return;
+    modal.classList.toggle('hidden', !isOpen);
+    if (isOpen) {
+      if (this.state.graph) {
+        this.updateOverview();
+        const layer = this.getCurrentLayerPayload();
+        this.updateMetricsPanel(layer);
+        this.updateLayerPanel(layer);
+      } else {
+        this.dom.overviewStats.innerHTML = 'Load a graph to inspect bundle methods, skeletons, and fabrication geometry.';
+        this.dom.bundleMetrics.innerHTML = 'No bundle has been computed yet.';
+        this.dom.layerContent.innerHTML = 'Display layer: raw graph.';
+      }
+    }
+  }
+
+
+  makeFlatViewPositions() {
+    return clonePositions(this.state.positions2D.map((p) => ({ x: p.x, y: p.y, z: 0 })));
+  }
+
+  syncViewPositionsForStage(layerOverride = null) {
+    const layer = layerOverride || this.state.displayLayer || 'raw';
+    const shouldUseFlat = this.state.currentMode === 'load2d' && layer === 'raw';
+    if (shouldUseFlat || !this.state.mappedPositions3D?.length) {
+      this.state.positions3D = this.makeFlatViewPositions();
+      return;
+    }
+    this.state.positions3D = clonePositions(this.state.mappedPositions3D);
+  }
+
+  rebuildRawLayer() {
+    if (!this.state.graph) return;
+    const quality = getQualityPreset(this.state.quality || this.dom.qualityMode.value);
+    const raw = buildRawPolylines(this.state.graph, this.state.positions3D, this.state.visibleMask, quality.maxEdges);
+    this.state.rawPolylines = raw.map((entry) => entry.points);
+    this.state.rawEdgeLookup = raw.map((entry) => entry.edgeIndex);
+  }
+
+  invalidateDerivedStates({ clearCache = true, clearFabrication = true, switchToRaw = true } = {}) {
+    if (clearCache) this.state.bundleCache.clear();
+    this.state.bundlePolylines = [];
+    this.state.bundleEdgeLookup = [];
+    this.state.bundleMetrics = null;
+    this.state.bundleRuntimeMs = 0;
+    this.state.skeletonPolylines = [];
+    this.state.skeletonStats = null;
+    this.dom.skeletonStats.innerHTML = 'No skeleton extracted yet.';
+    if (clearFabrication) this.clearFabricationPreview(false);
+    if (switchToRaw) {
+      this.dom.displayLayer.value = 'raw';
+      this.state.displayLayer = 'raw';
+    }
+  }
+
+  async loadUploadedGraph() {
+    const gexfFile = this.dom.gexfFile.files?.[0] || null;
+    const nodesCsvFile = this.dom.nodesCsvFile.files?.[0] || null;
+    const edgesCsvFile = this.dom.edgesCsvFile.files?.[0] || null;
+    if (!gexfFile && !(nodesCsvFile && edgesCsvFile)) {
+      this.updateStatus('Select one GEXF file, or both nodes and edges CSV files.');
+      return;
+    }
+
+    try {
+      this.setProgress('Reading graph files…', 0, true);
+      const rawGraph = await loadGraphFromFiles({
+        gexfFile,
+        nodesCsvFile,
+        edgesCsvFile,
+        onPhase: (phase) => this.setProgress(phase, this.dom.progressBar.value, true),
+        onProgress: (percent) => this.setProgress('Reading graph files…', percent, true)
+      });
+      const name = gexfFile?.name || `${nodesCsvFile?.name || 'nodes'} + ${edgesCsvFile?.name || 'edges'}`;
+      this.loadGraph(rawGraph, name);
+      this.updateStatus(`Loaded ${name}.`, `Nodes: ${this.state.graph.nodes.length.toLocaleString()} · Edges: ${this.state.graph.edges.length.toLocaleString()}`);
+    } catch (error) {
+      console.error(error);
+      this.updateStatus(`Load failed: ${error?.message || 'Unknown error'}`);
+    } finally {
+      this.setProgress('', 0, false);
+    }
+  }
+
+  loadDemoGraph() {
+    const key = this.dom.demoGraphSelect?.value || 'les-miserables';
+    const rawGraph = generateDemoRawGraph(key);
+    const label = DEMO_GRAPH_OPTIONS.find((entry) => entry.value === key)?.label || rawGraph.name || 'Demo graph';
+    this.loadGraph(rawGraph, label);
+    this.updateStatus(`Loaded demo graph: ${label}.`, `Nodes: ${this.state.graph.nodes.length.toLocaleString()} · Edges: ${this.state.graph.edges.length.toLocaleString()}`);
+  }
+
+  loadGraph(rawGraph, name = 'Graph') {
+    const graph = buildGraph(rawGraph);
+    this.state.graph = graph;
+    this.state.graphName = name;
+    this.state.layoutVersion += 1;
+    this.state.bundleCache.clear();
+    this.state.bundlePolylines = [];
+    this.state.bundleEdgeLookup = [];
+    this.state.skeletonPolylines = [];
+    this.state.skeletonStats = null;
+    this.state.selectedNodeIndex = null;
+    this.state.hoveredNodeIndex = null;
+    this.clearFabricationPreview(false);
+
+    const existing2D = graph.flags.has2DPositions
+      ? graph.nodes.map((node, i) => ({ x: Number(node.x) || i * 0.25, y: Number(node.y) || 0, z: 0 }))
+      : makeRandomPositions(graph.nodes.length);
+    this.state.positions2D = normalizePositions(existing2D, Number(this.dom.layoutScale.value) || 1);
+
+    const depthMode = graph.flags.hasZPositions ? 'original-z' : 'flat';
+    this.dom.depthMode.value = depthMode;
+    this.applyDepthMapping();
+    this.syncViewPositionsForStage('raw');
+    this.populateGraphControls();
+    this.refreshEncodingsAndLayers();
+    this.fitScene();
+    this.setMode('load2d');
+  }
+
+  populateGraphControls() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    const allAttrs = graph.attributes.nodeAll || [];
+    const numericAttrs = graph.attributes.nodeNumeric || [];
+    const categoricalAttrs = graph.attributes.nodeCategorical || [];
+
+    setOptions(this.dom.depthAttr, allAttrs, { includeBlank: true });
+    setOptions(this.dom.sizeAttr, numericAttrs, { includeBlank: true });
+    setOptions(this.dom.colorAttr, allAttrs, { includeBlank: true });
+    setOptions(this.dom.filterAttr, categoricalAttrs, { includeBlank: true, blankLabel: 'All nodes' });
+    setOptions(this.dom.layerAttr, categoricalAttrs, { includeBlank: true });
+
+    const preferredColor = categoricalAttrs.includes('community') ? 'community' : allAttrs[0] || '';
+    if (preferredColor) this.dom.colorAttr.value = preferredColor;
+    const preferredSize = numericAttrs.includes('influence') ? 'influence' : numericAttrs[0] || '';
+    if (preferredSize) this.dom.sizeAttr.value = preferredSize;
+    const preferredDepth = allAttrs.includes('layer') ? 'layer' : allAttrs.includes('timeSlice') ? 'timeSlice' : '';
+    if (preferredDepth) this.dom.depthAttr.value = preferredDepth;
+    const preferredLayer = categoricalAttrs.includes('layer') ? 'layer' : categoricalAttrs[0] || '';
+    if (preferredLayer) this.dom.layerAttr.value = preferredLayer;
+    const preferredFilter = categoricalAttrs.includes('community') ? 'community' : categoricalAttrs[0] || '';
+    if (preferredFilter) this.dom.filterAttr.value = preferredFilter;
+    this.populateFilterValues();
+
+    const available = graph.flags.has2DPositions ? 'existing' : 'forceatlas2';
+    this.dom.layoutSource.value = available;
+  }
+
+  populateFilterValues() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    const attr = this.dom.filterAttr.value;
+    if (!attr) {
+      setOptions(this.dom.filterValue, ['all'], { selected: 'all' });
+      return;
+    }
+    const values = [...new Set(graph.nodes.map((n) => String(n.attrs?.[attr] ?? n[attr] ?? 'missing')))].sort((a, b) => a.localeCompare(b));
+    setOptions(this.dom.filterValue, ['all', ...values], { selected: 'all' });
+  }
+
+  async applyLayout() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    const source = this.dom.layoutSource.value;
+    const scale = Number(this.dom.layoutScale.value) || 1;
+
+    if (source === 'existing') {
+      const positions = graph.flags.has2DPositions
+        ? graph.nodes.map((node, i) => ({ x: Number(node.x) || i * 0.25, y: Number(node.y) || 0, z: 0 }))
+        : makeRandomPositions(graph.nodes.length);
+      this.state.positions2D = normalizePositions(positions, scale);
+      this.state.layoutVersion += 1;
+      return;
+    }
+
+    if (source === 'random') {
+      this.state.positions2D = normalizePositions(makeRandomPositions(graph.nodes.length), scale);
+      this.state.layoutVersion += 1;
+      return;
+    }
+    if (source === 'circular') {
+      this.state.positions2D = normalizePositions(makeCircularPositions(graph), scale);
+      this.state.layoutVersion += 1;
+      return;
+    }
+    if (source === 'grid') {
+      this.state.positions2D = normalizePositions(makeGridPositions(graph), scale);
+      this.state.layoutVersion += 1;
+      return;
+    }
+    if (source === 'radial') {
+      this.state.positions2D = normalizePositions(makeRadialPositions(graph), scale);
+      this.state.layoutVersion += 1;
+      return;
+    }
+
+    if (source === 'forceatlas2') {
+      this.setProgress('Running ForceAtlas2 layout…', 0, true);
+      const worker = new Worker(new URL('./workers/layoutWorker.js', import.meta.url), { type: 'module' });
+      const payload = {
+        nodes: this.state.positions2D.map((p, i) => ({ index: i, x: p.x, y: p.y, size: this.state.nodeSizes[i] || 1 })),
+        edges: graph.edges.map((edge) => ({ source: edge.sourceIndex, target: edge.targetIndex, weight: edge.weight || 1 })),
+        iterations: Number(this.dom.layoutIterations.value) || 280,
+        gravity: Number(this.dom.layoutGravity.value) || 0.42,
+        repulsion: Number(this.dom.layoutRepulsion.value) || 7.2,
+        barnesHutOptimize: true,
+        adjustSizes: true,
+        outboundAttractionDistribution: true,
+        pinned: []
+      };
+      const positions = await new Promise((resolve, reject) => {
+        worker.onmessage = (event) => {
+          const { type, percent, positions: result, message } = event.data || {};
+          if (type === 'progress') this.setProgress('Running ForceAtlas2 layout…', percent ?? 0, true);
+          if (type === 'result') resolve(result || []);
+          if (type === 'error') reject(new Error(message || 'ForceAtlas2 failed.'));
+        };
+        worker.onerror = (error) => reject(error);
+        worker.postMessage(payload);
+      }).finally(() => worker.terminate());
+      this.state.positions2D = normalizePositions(positions.map((p) => ({ x: p.x, y: p.y, z: 0 })), scale);
+      this.state.layoutVersion += 1;
+      this.setProgress('', 0, false);
+    }
+  }
+
+  applyDepthMapping() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    const mode = this.dom.depthMode.value;
+    if (mode === 'globe') {
+      this.state.mappedPositions3D = mapPositionsToGlobe(this.state.positions2D, (Number(this.dom.zScale.value) || 24) * 4);
+    } else {
+      this.state.mappedPositions3D = mapPositionsTo3D(graph, this.state.positions2D, {
+        mode,
+        attr: this.dom.depthAttr.value,
+        zScale: Number(this.dom.zScale.value) || 24,
+        categoryGap: Number(this.dom.zCategoryGap.value) || 14,
+        jitter: this.dom.depthMode.value === 'random' ? 1.5 : 0,
+        preserveExistingZ: true
+      });
+    }
+    this.syncViewPositionsForStage(this.state.displayLayer || 'raw');
+  }
+
+  refreshEncodingsAndLayers() {
+    const graph = this.state.graph;
+    if (!graph) {
+      this.renderEmptyState();
+      return;
+    }
+
+    this.state.quality = this.dom.qualityMode.value;
+    this.state.visibleMask = buildVisibleMask(graph, {
+      degreeMin: Number(this.dom.degreeMin.value) || 0,
+      categoryAttr: this.dom.filterAttr.value,
+      categoryValue: this.dom.filterValue.value || 'all'
+    });
+
+    const style = getStylePreset(this.dom.stylePreset.value);
+    this.state.nodeSizes = getNodeSizes(graph, this.dom.nodeSizeMode.value, this.dom.sizeAttr.value, 1.6);
+    this.state.nodeColors = getNodeColors(graph, {
+      colorMode: this.dom.nodeColorMode.value,
+      colorAttr: this.dom.colorAttr.value,
+      constantColor: this.dom.constantNodeColor.value,
+      rampStart: style.edgeStart,
+      rampEnd: style.edgeEnd
+    });
+    this.state.edgeColors = computeEdgeColors(graph, this.state.nodeColors, style, this.dom.edgeColorMode.value);
+
+    this.syncViewPositionsForStage(this.state.displayLayer || 'raw');
+    this.rebuildRawLayer();
+
+    const background = this.dom.backgroundColor?.value || style.background;
+    this.sceneController.setBackground(background);
+    document.documentElement.style.setProperty('--studio-bg', background);
+    this.renderNodes();
+    this.refreshVisibleLayer();
+    this.updateOverview();
+    this.updateSelectionPanel();
+    this.syncQuickSceneTools();
+    this.renderLayerAvailability();
+  }
+
+  getFocusContext() {
+    const graph = this.state.graph;
+    const focusSet = new Set();
+    const focusEdgeSet = new Set();
+    if (graph && this.state.selectedNodeIndex != null) {
+      const selected = this.state.selectedNodeIndex;
+      const neighbors = graph.metrics.neighbors[selected] || [];
+      const neighborSet = new Set(neighbors);
+      focusSet.add(selected);
+      neighbors.forEach((n) => focusSet.add(n));
+      graph.edges.forEach((edge, edgeIndex) => {
+        const a = edge.sourceIndex;
+        const b = edge.targetIndex;
+        const isSelectedLink = (a === selected && neighborSet.has(b)) || (b === selected && neighborSet.has(a));
+        if (isSelectedLink) focusEdgeSet.add(edgeIndex);
+      });
+    }
+    return { focusSet, focusEdgeSet };
+  }
+
+  renderNodes() {
+    const { focusSet } = this.getFocusContext();
+    this.nodeRenderer.update({
+      positions: this.state.positions3D,
+      sizes: this.state.nodeSizes,
+      colors: this.state.nodeColors,
+      visibleMask: this.state.visibleMask,
+      emphasisSet: focusSet,
+      selectedIndex: this.state.selectedNodeIndex ?? -1,
+      dimOpacity: 0.1
+    });
+    if (this.nodeRenderer.mesh) this.nodeRenderer.mesh.visible = !!this.state.showNodes;
+    if (this.dom.labelsLayer) this.dom.labelsLayer.style.display = this.state.showLabels ? '' : 'none';
+    this.sceneController.render();
+  }
+
+  getCurrentLayerPayload() {
+    const style = getStylePreset(this.dom.stylePreset.value);
+    const layer = this.state.displayLayer;
+    if (layer === 'skeleton' && this.state.skeletonPolylines.length) {
+      return {
+        name: 'skeleton',
+        polylines: this.state.skeletonPolylines,
+        lookup: this.state.skeletonPolylines.map((_, i) => i),
+        colors: this.state.skeletonPolylines.map(() => new THREE.Color(style.edgeEnd)),
+        opacity: Math.min(1, (Number(this.dom.edgeOpacity.value) || style.edgeOpacity) + 0.18)
+      };
+    }
+    if (layer === 'bundle' && this.state.bundlePolylines.length) {
+      return {
+        name: 'bundle',
+        polylines: this.state.bundlePolylines,
+        lookup: this.state.bundleEdgeLookup,
+        colors: this.state.bundleEdgeLookup.map((edgeIndex) => this.state.edgeColors[edgeIndex] || new THREE.Color(style.edgeStart)),
+        opacity: Number(this.dom.edgeOpacity.value) || style.edgeOpacity
+      };
+    }
+    if (layer === 'fabrication' && this.fabricationGroup) {
+      return {
+        name: 'fabrication',
+        polylines: [],
+        lookup: [],
+        colors: [],
+        opacity: Number(this.dom.edgeOpacity.value) || style.edgeOpacity
+      };
+    }
+    return {
+      name: 'raw',
+      polylines: this.state.rawPolylines,
+      lookup: this.state.rawEdgeLookup,
+      colors: this.state.rawEdgeLookup.map((edgeIndex) => this.state.edgeColors[edgeIndex] || new THREE.Color(style.edgeStart)),
+      opacity: Number(this.dom.edgeOpacity.value) || style.edgeOpacity
+    };
+  }
+
+  refreshVisibleLayer() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    this.state.displayLayer = this.dom.displayLayer.value;
+    this.syncViewPositionsForStage(this.state.displayLayer || 'raw');
+    this.rebuildRawLayer();
+    const layer = this.getCurrentLayerPayload();
+    const { focusSet, focusEdgeSet } = this.getFocusContext();
+    const emphasisMask = layer.lookup.map((edgeIndex) => focusEdgeSet.has(edgeIndex));
+
+    if (layer.name === 'fabrication' && this.fabricationGroup) {
+      this.edgeRenderer.clear();
+      this.setSolidPreview(null);
+      this.fabricationGroup.visible = !!this.state.showGeometry;
+    } else {
+      if (this.fabricationGroup) this.fabricationGroup.visible = false;
+      this.edgeRenderer.drawPolylines({
+        polylines: layer.polylines,
+        colors: layer.colors,
+        opacity: layer.opacity,
+        emphasisMask,
+        dimOpacity: 0.1,
+        focusOpacity: focusEdgeSet.size ? 1 : layer.opacity
+      });
+      this.edgeRenderer.group.visible = !!this.state.showGeometry;
+      this.buildSolidPreview(layer);
+    }
+
+    this.labelRenderer.update({
+      labelsEnabled: this.state.showLabels && (Number(this.dom.labelCount.value) || 0) > 0,
+      count: Number(this.dom.labelCount.value) || 0,
+      fontSize: 12,
+      nodes: graph.nodes,
+      positions: this.state.positions3D,
+      metrics: graph.metrics,
+      camera: this.sceneController.camera,
+      viewportWidth: this.dom.viewport.clientWidth,
+      viewportHeight: this.dom.viewport.clientHeight,
+      background: this.dom.backgroundColor?.value || getStylePreset(this.dom.stylePreset.value).background,
+      visibleMask: this.state.visibleMask,
+      focusIndexes: Array.from(focusSet)
+    });
+
+    if (this.dom.labelsLayer) this.dom.labelsLayer.style.display = this.state.showLabels ? '' : 'none';
+    this.updateMetricsPanel(layer);
+    this.updateLayerPanel(layer);
+    this.syncQuickSceneTools();
+    this.renderLayerAvailability();
+    this.sceneController.render();
+  }
+
+  buildSolidPreview(layer) {
+    const enabled = !!this.dom.solidPreview?.checked;
+    if (!enabled || !layer.polylines.length) {
+      this.setSolidPreview(null);
+      return;
+    }
+    const quality = getQualityPreset(this.state.quality);
+    const styleKey = this.dom.stylePreset.value;
+    const style = getStylePreset(styleKey);
+    const preview = buildPolylineMeshGroup(layer.polylines, {
+      radius: Number(this.dom.solidRadius.value) || 0.34,
+      taper: Number(this.dom.solidTaper.value) || 0.08,
+      materialMode: style.solidMaterial,
+      color: style.edgeEnd,
+      opacity: Math.min(0.98, Math.max(0.16, Number(this.dom.edgeOpacity.value) || style.edgeOpacity)),
+      maxSegments: quality.solidPreviewSegments,
+      maxCurves: quality.solidPreviewCurves,
+      closedEnds: false,
+      addJointSpheres: false
+    });
+    this.setSolidPreview(preview);
+  }
+
+  setSolidPreview(group) {
+    if (this.solidPreviewGroup) {
+      this.sceneController.scene.remove(this.solidPreviewGroup);
+      this.solidPreviewGroup.traverse((obj) => {
+        obj.geometry?.dispose?.();
+        obj.material?.dispose?.();
+      });
+      this.solidPreviewGroup = null;
+    }
+    if (group) {
+      this.solidPreviewGroup = group;
+      this.solidPreviewGroup.visible = !!this.state.showGeometry;
+      this.sceneController.scene.add(group);
+    }
+  }
+
+  fitScene() {
+    const positions = this.state.positions3D?.length ? this.state.positions3D : [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 80 }];
+    this.sceneController.fitToPositions(positions);
+  }
+
+  updateOverview() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    const visibleNodes = this.state.visibleMask.filter(Boolean).length;
+    const visibleEdges = this.state.rawPolylines.length;
+    this.dom.overviewStats.innerHTML = `
+      <div><strong>${htmlEscape(this.state.graphName)}</strong></div>
+      <div>Nodes: ${graph.nodes.length.toLocaleString()} · Visible: ${visibleNodes.toLocaleString()}</div>
+      <div>Edges: ${graph.edges.length.toLocaleString()} · Drawn: ${visibleEdges.toLocaleString()}</div>
+      <div>Quality: ${htmlEscape(this.state.quality)} · Active method: ${htmlEscape(getMethodById(this.state.activeMethod).name)}</div>
+    `;
+    this.dom.statusStats.textContent = `Nodes: ${graph.nodes.length.toLocaleString()} · Edges: ${graph.edges.length.toLocaleString()} · Layer: ${this.state.displayLayer}`;
+  }
+
+  updateSelectionPanel() {
+    const graph = this.state.graph;
+    if (!graph) return;
+    if (this.state.selectedNodeIndex == null) {
+      const hovered = this.state.hoveredNodeIndex;
+      if (hovered == null) {
+        this.dom.selectionContent.innerHTML = 'Hover or click a node to inspect metadata.';
+      } else {
+        const node = graph.nodes[hovered];
+        this.dom.selectionContent.innerHTML = summarizeNode(node);
+      }
+      return;
+    }
+    const node = graph.nodes[this.state.selectedNodeIndex];
+    const degree = graph.metrics.degree[this.state.selectedNodeIndex] || 0;
+    const weighted = graph.metrics.weightedDegree[this.state.selectedNodeIndex] || 0;
+    const neighbors = (graph.metrics.neighbors[this.state.selectedNodeIndex] || []).slice(0, 8).map((i) => graph.nodes[i]?.label || graph.nodes[i]?.id).filter(Boolean);
+    this.dom.selectionContent.innerHTML = `
+      ${summarizeNode(node)}
+      <div class="top-gap small"><strong>Degree</strong>: ${formatNumber(degree, 0)} · <strong>Weighted</strong>: ${formatNumber(weighted)}</div>
+      <div class="top-gap small"><strong>Neighbors</strong>: ${neighbors.length ? htmlEscape(neighbors.join(', ')) : 'None'}</div>
+    `;
+  }
+
+  updateMetricsPanel(layer = this.getCurrentLayerPayload()) {
+    const metrics = layer.name === 'bundle' && this.state.bundleMetrics ? this.state.bundleMetrics : metricsFromPolylines(this.state.graph, layer.polylines, layer.lookup);
+    const runtime = layer.name === 'bundle' ? this.state.bundleRuntimeMs : 0;
+    this.dom.bundleMetrics.innerHTML = `
+      <div><strong>Layer</strong>: ${htmlEscape(layer.name)}</div>
+      <div><strong>Visible curves</strong>: ${layer.polylines.length.toLocaleString()}</div>
+      <div><strong>Average inflation</strong>: ${formatNumber(metrics.averageInflation)}</div>
+      <div><strong>Max inflation</strong>: ${formatNumber(metrics.maxInflation)}</div>
+      <div><strong>Compactness</strong>: ${formatNumber(metrics.compactness)}</div>
+      <div><strong>Average turn</strong>: ${formatNumber(metrics.averageTurn)}</div>
+      ${runtime ? `<div><strong>Worker runtime</strong>: ${formatNumber(runtime)} ms</div>` : ''}
+    `;
+  }
+
+  updateLayerPanel(layer = this.getCurrentLayerPayload()) {
+    const lines = [];
+    const available = this.computeAvailableLayers();
+    lines.push(`<div><strong>Display</strong>: ${htmlEscape(layer.name)}</div>`);
+    lines.push(`<div><strong>Solid preview</strong>: ${this.dom.solidPreview?.checked ? 'on' : 'off'}</div>`);
+    lines.push(`<div><strong>Visibility</strong>: nodes ${this.state.showNodes ? 'on' : 'off'} · labels ${this.state.showLabels ? 'on' : 'off'} · geometry ${this.state.showGeometry ? 'on' : 'off'}</div>`);
+    lines.push(`<div><strong>Available states</strong>: raw ${available.raw ? '✓' : '—'} · bundle ${available.bundle ? '✓' : '—'} · skeleton ${available.skeleton ? '✓' : '—'} · fabrication ${available.fabrication ? '✓' : '—'}</div>`);
+    if (this.state.skeletonStats) {
+      lines.push(`<div><strong>Skeleton branches</strong>: ${formatNumber(this.state.skeletonStats.branches, 0)}</div>`);
+      lines.push(`<div><strong>Avg branch length</strong>: ${formatNumber(this.state.skeletonStats.averageBranchLength)}</div>`);
+    }
+    if (this.state.fabricationInfo) {
+      lines.push(`<div><strong>Fabrication segments</strong>: ${formatNumber(this.state.fabricationInfo.totalSegments, 0)}</div>`);
+    }
+    this.dom.layerContent.innerHTML = lines.join('');
+  }
+
+  async runSelectedBundling() {
+    if (!this.state.graph) return;
+    const methodId = this.state.activeMethod;
+    await this.computeBundling(methodId, { applyToScene: true });
+    this.dom.displayLayer.value = 'bundle';
+    this.state.displayLayer = 'bundle';
+    this.refreshVisibleLayer();
+  }
+
+  currentBundlingParams() {
+    return {
+      samples: Number(this.dom.bundleSamples.value) || 16,
+      iterations: Number(this.dom.bundleIterations.value) || 8,
+      strength: Number(this.dom.bundleStrength.value) || 0.58,
+      lift: Number(this.dom.bundleLift.value) || 1.4,
+      clusterCount: Number(this.dom.bundleClusterCount.value) || 12,
+      hubCount: Number(this.dom.bundleHubCount.value) || 10,
+      detourCap: Number(this.dom.bundleDetour.value) || 2.4,
+      exponent: Number(this.dom.bundleExponent.value) || 2.6,
+      directionSplit: Number(this.dom.directionSplit.value) || 3.5,
+      grid: Number(this.dom.bundleGrid.value) || getQualityPreset(this.state.quality).grid,
+      layerAttr: this.dom.layerAttr.value,
+      layerGap: Number(this.dom.layerGap.value) || 14
+    };
+  }
+
+  bundlingCacheKey(methodId) {
+    return JSON.stringify({
+      methodId,
+      layoutVersion: this.state.layoutVersion,
+      quality: this.state.quality,
+      visibleEdges: this.state.rawEdgeLookup,
+      params: this.currentBundlingParams()
+    });
+  }
+
+  async computeBundling(methodId, { applyToScene = false } = {}) {
+    const graph = this.state.graph;
+    if (!graph) return { polylines: [], edgeIndexes: [], runtimeMs: 0, metrics: null };
+
+    const cacheKey = this.bundlingCacheKey(methodId);
+    if (this.state.bundleCache.has(cacheKey)) {
+      const cached = this.state.bundleCache.get(cacheKey);
+      if (applyToScene) {
+        this.state.bundlePolylines = cached.polylines;
+        this.state.bundleEdgeLookup = cached.edgeIndexes;
+        this.state.bundleRuntimeMs = cached.runtimeMs;
+        this.state.bundleMetrics = cached.metrics;
+      }
+      return cached;
+    }
+
+    const params = this.currentBundlingParams();
+    const method = getMethodById(methodId);
+    this.setProgress(`Bundling with ${method.name}…`, 0, true);
+    const worker = new Worker(new URL('./workers/studioBundleWorker.js', import.meta.url), { type: 'module' });
+    const payload = {
+      nodes: this.state.positions3D,
+      edges: graph.edges.map((edge) => ({ sourceIndex: edge.sourceIndex, targetIndex: edge.targetIndex, weight: edge.weight || 1 })),
+      edgeIndexes: this.state.rawEdgeLookup,
+      algorithm: methodId,
+      samples: params.samples,
+      hubCount: params.hubCount,
+      lift: params.lift,
+      detourCap: params.detourCap,
+      exponent: params.exponent,
+      degree: graph.metrics.degree,
+      strength: params.strength,
+      iterations: params.iterations,
+      clusterCount: params.clusterCount,
+      directionSplit: params.directionSplit,
+      layerValues: params.layerAttr ? graph.nodes.map((node) => node.attrs?.[params.layerAttr] ?? node[params.layerAttr] ?? 'missing') : [],
+      layerGap: params.layerGap,
+      grid: params.grid,
+      excludeDirect: false
+    };
+
+    const result = await new Promise((resolve, reject) => {
+      worker.onmessage = (event) => {
+        const data = event.data || {};
+        if (data.type === 'progress') this.setProgress(`Bundling with ${method.name}…`, data.percent ?? 0, true);
+        if (data.type === 'result') resolve(data);
+        if (data.type === 'error') reject(new Error(data.message || 'Bundling failed.'));
+      };
+      worker.onerror = (error) => reject(error);
+      worker.postMessage(payload);
+    }).finally(() => worker.terminate());
+
+    const metrics = metricsFromPolylines(graph, result.polylines, result.edgeIndexes);
+    const packaged = {
+      polylines: result.polylines,
+      edgeIndexes: result.edgeIndexes,
+      runtimeMs: result.runtimeMs,
+      metrics
+    };
+    this.state.bundleCache.set(cacheKey, packaged);
+
+    if (applyToScene) {
+      this.state.bundlePolylines = packaged.polylines;
+      this.state.bundleEdgeLookup = packaged.edgeIndexes;
+      this.state.bundleRuntimeMs = packaged.runtimeMs;
+      this.state.bundleMetrics = packaged.metrics;
+      this.updateStatus(`Computed ${method.name}.`, `Visible bundled curves: ${packaged.polylines.length.toLocaleString()} · Runtime: ${formatNumber(packaged.runtimeMs)} ms`);
+    }
+    this.setProgress('', 0, false);
+    return packaged;
+  }
+
+  runSkeletonExtraction() {
+    if (!this.state.graph) return;
+    const sourcePolylines = this.state.bundlePolylines.length ? this.state.bundlePolylines : this.state.rawPolylines;
+    const extraction = extractDensitySkeleton(sourcePolylines, {
+      grid: Number(this.dom.skeletonGrid.value) || 84,
+      threshold: Number(this.dom.skeletonThreshold.value) || 3,
+      simplify: Number(this.dom.skeletonSimplify.value) || 1.2,
+      minBranchLength: Number(this.dom.skeletonMinBranch.value) || 4
+    });
+    this.state.skeletonPolylines = extraction.polylines;
+    this.state.skeletonStats = extraction.stats;
+    this.dom.skeletonStats.innerHTML = `
+      <div><strong>Branches</strong>: ${formatNumber(extraction.stats.branches, 0)}</div>
+      <div><strong>Occupied cells</strong>: ${formatNumber(extraction.stats.occupied, 0)}</div>
+      <div><strong>Avg branch length</strong>: ${formatNumber(extraction.stats.averageBranchLength)}</div>
+    `;
+    this.dom.displayLayer.value = 'skeleton';
+    this.state.displayLayer = 'skeleton';
+    this.refreshVisibleLayer();
+    this.updateStatus('Extracted centerline skeleton.');
+  }
+
+  buildFabricationPreview() {
+    if (!this.state.graph) return;
+    const source = this.dom.fabricationSource.value;
+    let polylines = this.state.bundlePolylines;
+    if (source === 'skeleton') polylines = this.state.skeletonPolylines;
+    else if (source === 'raw') polylines = this.state.rawPolylines;
+
+    if (!polylines.length) {
+      this.updateStatus(`No ${source} geometry is available for fabrication.`);
+      return;
+    }
+
+    const style = getStylePreset(this.dom.stylePreset.value);
+    const group = buildFabricationGroup(polylines, this.state.positions3D.filter((_, i) => this.state.visibleMask[i]), {
+      radius: Number(this.dom.fabricationRadius.value) || 0.5,
+      taper: Number(this.dom.solidTaper.value) || 0.08,
+      addBasePlate: this.dom.addBasePlate.checked,
+      addPedestal: this.dom.addPedestal.checked,
+      nodeConnectorScale: Number(this.dom.nodeConnectorScale.value) || 1.6,
+      materialMode: getStylePreset(this.dom.stylePreset.value).solidMaterial,
+      color: style.edgeEnd,
+      opacity: 0.98,
+      normalizeWidth: Number(this.dom.fabricationWidth.value) || 180,
+      wallRelief: this.dom.wallRelief.checked,
+      reliefDepth: Number(this.dom.reliefDepth.value) || 18
+    });
+
+    if (this.fabricationGroup) {
+      this.sceneController.scene.remove(this.fabricationGroup);
+      this.fabricationGroup.traverse((obj) => {
+        obj.geometry?.dispose?.();
+        obj.material?.dispose?.();
+      });
+    }
+    this.fabricationGroup = group;
+    this.sceneController.scene.add(group);
+
+    this.state.fabricationInfo = evaluatePrintability(polylines, {
+      radius: Number(this.dom.fabricationRadius.value) || 0.5,
+      minPrintableRadius: 0.4
+    });
+    this.dom.printabilityPanel.innerHTML = `
+      <div><strong>Longest segment</strong>: ${formatNumber(this.state.fabricationInfo.longestSegment)}</div>
+      <div><strong>Total segments</strong>: ${formatNumber(this.state.fabricationInfo.totalSegments, 0)}</div>
+      <div class="top-gap">${this.state.fabricationInfo.warnings.map((w) => `<div>• ${htmlEscape(w)}</div>`).join('')}</div>
+    `;
+    this.dom.displayLayer.value = 'fabrication';
+    this.state.displayLayer = 'fabrication';
+    this.refreshVisibleLayer();
+    this.updateStatus('Fabrication preview built.');
+  }
+
+  clearFabricationPreview(updatePanel = true) {
+    if (this.fabricationGroup) {
+      this.sceneController.scene.remove(this.fabricationGroup);
+      this.fabricationGroup.traverse((obj) => {
+        obj.geometry?.dispose?.();
+        obj.material?.dispose?.();
+      });
+      this.fabricationGroup = null;
+    }
+    this.state.fabricationInfo = null;
+    if (updatePanel) this.dom.printabilityPanel.innerHTML = 'Fabrication preview cleared.';
+    if (this.state.displayLayer === 'fabrication') {
+      this.dom.displayLayer.value = this.state.bundlePolylines.length ? 'bundle' : 'raw';
+      this.state.displayLayer = this.dom.displayLayer.value;
+      this.refreshVisibleLayer();
+    }
+  }
+
+  async exportFabrication(format) {
+    if (!this.fabricationGroup) {
+      this.updateStatus('Build a fabrication preview before exporting STL / OBJ / GLB.');
+      return;
+    }
+    const blob = await exportGroup(this.fabricationGroup, format);
+    downloadBlob(blob, `${this.safeFileStem()}-fabrication.${format}`);
+  }
+
+  async runComparisonBoard() {
+    if (!this.state.graph) return;
+    const left = this.dom.compareLeft.value;
+    const right = this.dom.compareRight.value;
+    this.setProgress('Generating comparison board…', 0, true);
+    const leftResult = await this.computeBundling(left, { applyToScene: false });
+    this.setProgress('Generating comparison board…', 55, true);
+    const rightResult = await this.computeBundling(right, { applyToScene: false });
+    this.setProgress('', 0, false);
+
+    const style = getStylePreset(this.dom.stylePreset.value);
+    const leftSvg = buildPreviewSvg(leftResult.polylines, {
+      background: style.background,
+      stroke: style.edgeStart,
+      strokeOpacity: 0.44
+    });
+    const rightSvg = buildPreviewSvg(rightResult.polylines, {
+      background: style.background,
+      stroke: style.edgeEnd,
+      strokeOpacity: 0.44
+    });
+
+    const renderCard = (methodId, result, svgText) => {
+      const method = getMethodById(methodId);
+      const uri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+      return `
+        <article class="compare-card">
+          <div class="compare-card-head">
+            <div>
+              <div class="eyebrow">${htmlEscape(method.family)}</div>
+              <h3>${htmlEscape(method.name)}</h3>
+            </div>
+            <div class="chip">${formatNumber(result.runtimeMs)} ms</div>
+          </div>
+          <img src="${uri}" alt="${htmlEscape(method.name)} preview" />
+          <div class="compare-metrics">
+            <div>Inflation: ${formatNumber(result.metrics.averageInflation)}</div>
+            <div>Compactness: ${formatNumber(result.metrics.compactness)}</div>
+            <div>Turn: ${formatNumber(result.metrics.averageTurn)}</div>
+          </div>
+        </article>
+      `;
+    };
+
+    this.dom.compareBoard.innerHTML = renderCard(left, leftResult, leftSvg) + renderCard(right, rightResult, rightSvg);
+    this.dom.rightRail?.classList.remove('collapsed');
+    this.dom.workspace?.classList.remove('right-collapsed');
+    this.updateStatus(`Comparison generated for ${getMethodById(left).name} and ${getMethodById(right).name}.`);
+  }
+
+  applyStylePresetUi(presetOnly = false) {
+    const style = getStylePreset(this.dom.stylePreset.value);
+    if (!presetOnly) this.dom.edgeOpacity.value = style.edgeOpacity;
+    if (this.dom.backgroundColor) this.dom.backgroundColor.value = style.background;
+    document.documentElement.style.setProperty('--studio-bg', this.dom.backgroundColor?.value || style.background);
+    this.syncQuickSceneTools();
+  }
+
+  setCameraPreset(kind) {
+    const positions = this.state.positions3D;
+    if (!positions?.length) return;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    positions.forEach((p) => {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      minZ = Math.min(minZ, p.z || 0); maxZ = Math.max(maxZ, p.z || 0);
+    });
+    const cx = (minX + maxX) * 0.5;
+    const cy = (minY + maxY) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
+    const target = this.sceneController.controls.target;
+    target.set(cx, cy, cz);
+    if (kind === 'top') this.sceneController.camera.position.set(cx, cy, cz + span * 2.5 + 10);
+    else if (kind === 'side') this.sceneController.camera.position.set(cx + span * 2.5 + 10, cy, cz);
+    else this.sceneController.camera.position.set(cx + span * 1.6, cy + span * 1.1, cz + span * 1.8);
+    this.sceneController.camera.lookAt(target);
+    this.sceneController.controls.update();
+    this.sceneController.render();
+  }
+
+  savePreset() {
+    const name = (this.dom.presetName.value || '').trim();
+    if (!name) {
+      this.updateStatus('Enter a preset name first.');
+      return;
+    }
+    const presets = this.readPresets();
+    presets[name] = this.capturePresetState();
+    localStorage.setItem(this.presetStorageKey, JSON.stringify(presets));
+    this.refreshPresetSelect(name);
+    this.updateStatus(`Saved preset “${name}”.`);
+  }
+
+  loadPreset() {
+    const name = this.dom.savedPresetSelect.value;
+    if (!name) return;
+    const presets = this.readPresets();
+    const preset = presets[name];
+    if (!preset) return;
+    this.applyPresetState(preset);
+    this.updateStatus(`Loaded preset “${name}”.`);
+  }
+
+  deletePreset() {
+    const name = this.dom.savedPresetSelect.value;
+    if (!name) return;
+    const presets = this.readPresets();
+    delete presets[name];
+    localStorage.setItem(this.presetStorageKey, JSON.stringify(presets));
+    this.refreshPresetSelect();
+    this.updateStatus(`Deleted preset “${name}”.`);
+  }
+
+  readPresets() {
     try {
       return JSON.parse(localStorage.getItem(this.presetStorageKey) || '{}');
     } catch {
@@ -610,987 +1748,145 @@ export class App {
     }
   }
 
-  savePreset() {
-    const name = (getEl('presetName').value || '').trim();
-    if (!name) {
-      alert('Enter a preset name first.');
-      return;
-    }
-    const presets = this.getSavedPresets();
-    presets[name] = this.readCurrentPreset();
-    localStorage.setItem(this.presetStorageKey, JSON.stringify(presets));
-    this.refreshPresetMenu(name);
-    this.setStatus(`Preset saved: ${name}`);
+  refreshPresetSelect(selected = '') {
+    const names = Object.keys(this.readPresets()).sort((a, b) => a.localeCompare(b));
+    setOptions(this.dom.savedPresetSelect, names, { includeBlank: true, selected });
   }
 
-  async loadPreset() {
-    const name = getEl('presetSelect').value;
-    if (!name) return;
-    const preset = this.getSavedPresets()[name];
-    if (!preset) return;
-    this.applyPresetControls(preset);
-    this.applyViewSettings();
-    if (this.state.graph) {
-      await this.run2D(false);
-      if (this.state.positions3D.length || getEl('zMode').value !== 'flat') await this.run3D(false);
-      if (this.state.edgeLayer.kind === 'custom') this.redrawCurrentEdgeAppearance();
-    }
-    this.setStatus(`Preset loaded: ${name}`);
-  }
-
-  deletePreset() {
-    const name = getEl('presetSelect').value;
-    if (!name) return;
-    const presets = this.getSavedPresets();
-    delete presets[name];
-    localStorage.setItem(this.presetStorageKey, JSON.stringify(presets));
-    this.setStatus(`Preset deleted: ${name}`);
-  }
-
-  refreshPresetMenu(selectName = '') {
-    const presets = this.getSavedPresets();
-    const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
-    setOptions(getEl('presetSelect'), names, { includeBlank: true, blankLabel: '— none —' });
-    if (selectName && names.includes(selectName)) getEl('presetSelect').value = selectName;
-  }
-
-  inferBestNodeColoring({ excludeOriginal = false } = {}) {
-    const graph = this.state.graph;
-    if (!graph) return { mode: 'single', singleColor: '#7ec8ff', rampColor: '#ff9b66' };
-
-    const reserved = /^(id|label|name|x|y|z|size)$/i;
-    const preferred = /(community|modularity|cluster|group|party|category|class|type|faction|bloc)/i;
-    const allAttrs = [...graph.attributes.nodeAll].filter((attr) => attr && !reserved.test(attr));
-
-    const colorStats = (colors) => {
-      const valid = colors.filter(Boolean);
-      const unique = new Set(valid.map((c) => c.getHexString()));
-      const darkRatio = valid.length ? valid.filter((c) => colorLuminance(c) < 0.18).length / valid.length : 1;
-      const avgLuminance = valid.length ? valid.reduce((sum, c) => sum + colorLuminance(c), 0) / valid.length : 0;
-      return { validCount: valid.length, uniqueCount: unique.size, darkRatio, avgLuminance };
-    };
-
-    if (!excludeOriginal) {
-      const originalStats = colorStats(graph.nodes.map((node) => parseLiteralColor(this.getOriginalNodeColor(node))));
-      if (originalStats.validCount >= Math.max(3, Math.floor(graph.nodes.length * 0.2))
-        && originalStats.uniqueCount >= 3
-        && originalStats.darkRatio < 0.7
-        && originalStats.avgLuminance > 0.18) {
-        return { mode: 'original' };
-      }
-    }
-
-    let bestLiteralAttr = null;
-    let bestCategoricalAttr = null;
-    let bestNumericAttr = null;
-    let bestCategoricalScore = -Infinity;
-    let bestNumericScore = -Infinity;
-
-    allAttrs.forEach((attr) => {
-      const values = graph.nodes.map((node) => this.getNodeAttrValue(node, attr)).filter((value) => value != null && String(value).trim() !== '');
-      if (!values.length) return;
-
-      const literalStats = colorStats(values.map((value) => parseLiteralColor(value)));
-      if (literalStats.validCount / values.length > 0.6 && literalStats.uniqueCount >= 3 && literalStats.darkRatio < 0.8) {
-        bestLiteralAttr = bestLiteralAttr || attr;
-      }
-
-      const numericValues = values.map((value) => this.coerceNumeric(value)).filter((value) => Number.isFinite(value));
-      if (numericValues.length >= Math.max(3, Math.floor(values.length * 0.6))) {
-        const min = Math.min(...numericValues);
-        const max = Math.max(...numericValues);
-        if (max > min) {
-          const score = (preferred.test(attr) ? 5 : 0) + Math.log10(Math.max(2, numericValues.length));
-          if (score > bestNumericScore) {
-            bestNumericScore = score;
-            bestNumericAttr = attr;
-          }
-        }
-      }
-
-      const uniqueCount = new Set(values.map((value) => String(value))).size;
-      const ratio = uniqueCount / Math.max(1, values.length);
-      if (uniqueCount >= 2 && uniqueCount <= Math.min(32, Math.max(6, Math.floor(values.length * 0.35))) && ratio < 0.65) {
-        const score = (preferred.test(attr) ? 12 : 0) + (12 - uniqueCount) - ratio * 4;
-        if (score > bestCategoricalScore) {
-          bestCategoricalScore = score;
-          bestCategoricalAttr = attr;
-        }
-      }
-    });
-
-    if (bestLiteralAttr) return { mode: 'attribute', attribute: bestLiteralAttr };
-    if (bestCategoricalAttr) return { mode: 'attribute', attribute: bestCategoricalAttr };
-    if (bestNumericAttr) return { mode: 'attribute', attribute: bestNumericAttr, rampColor: '#ff9b66' };
-    return { mode: 'single', singleColor: '#7ec8ff', rampColor: '#ff9b66' };
-  }
-
-  ensureVisibleDefaultColors() {
-    const background = hexToColor(getEl('backgroundColor').value);
-    const singleColor = hexToColor(getEl('nodeSingleColor').value);
-    if (Math.abs(colorLuminance(singleColor) - colorLuminance(background)) < 0.24) {
-      getEl('nodeSingleColor').value = colorLuminance(background) < 0.45 ? '#7ec8ff' : '#1f57d6';
-    }
-    const graph = this.state.graph;
-    if (!graph) return;
-
-    const suggestion = this.inferBestNodeColoring();
-    if (suggestion.mode) getEl('nodeColorMode').value = suggestion.mode;
-    if (suggestion.attribute) {
-      const attrSelect = getEl('nodeColorAttribute');
-      const hasOption = [...attrSelect.options].some((option) => option.value === suggestion.attribute);
-      if (hasOption) attrSelect.value = suggestion.attribute;
-    }
-    if (suggestion.singleColor) getEl('nodeSingleColor').value = suggestion.singleColor;
-    if (suggestion.rampColor) getEl('nodeRampColor').value = suggestion.rampColor;
-  }
-
-  async handleLoadGraph() {
-    const gexfFile = getEl('gexfFile').files[0];
-    const nodesCsvFile = getEl('nodesCsvFile').files[0];
-    const edgesCsvFile = getEl('edgesCsvFile').files[0];
-    if (!gexfFile && !(nodesCsvFile && edgesCsvFile)) {
-      this.setStatus('Choose one GEXF file, or both nodes and edges CSV files.');
-      return;
-    }
-    try {
-      this.showProgress('Loading graph…');
-      this.setStatus(nodesCsvFile && edgesCsvFile ? 'Loading CSV graph…' : 'Loading graph…');
-      const rawGraph = await loadGraphFromFiles({
-        gexfFile,
-        nodesCsvFile,
-        edgesCsvFile,
-        onPhase: (title) => { this.dom.progressTitle.textContent = title; },
-        onProgress: (percent) => this.setProgress(percent)
-      });
-      this.dom.progressTitle.textContent = 'Building graph…';
-      this.setProgress(100);
-      this.state.graph = buildGraph(rawGraph);
-      this.state.base2DPositions = [];
-      this.state.positions2D = [];
-      this.state.positions3D = [];
-      this.state.nodeSizes = [];
-      this.state.nodeColors = [];
-      this.state.nodeColorMeta = null;
-      this.state.nodeSizeMeta = null;
-      this.state.activeView = '2d';
-      this.state.selectedNodeIndex = null;
-      this.state.hoveredNodeIndex = null;
-      this.state.edgeLayer = { kind: 'preview', edgeIndexes: [] };
-      this.state.pinnedNodes = new Set();
-      this.state.pinnedBasePositions = new Array(this.state.graph.nodes.length).fill(null);
-      this.state.visibleMask = new Array(this.state.graph.nodes.length).fill(true);
-      this.hideSelectedNode();
-      this.edgeRenderer.clear();
-
-      this.populateAttributeMenus();
-      this.ensureVisibleDefaultColors();
-      this.setStats();
-      this.enableStage(2, true);
-      this.enableStage(3, true);
-      this.enableStage(4, true);
-      getEl('positionSource').value = this.state.graph.flags.has2DPositions ? 'existing' : 'forceatlas2';
-      getEl('zMode').value = this.state.graph.flags.hasZPositions ? 'original' : 'flat';
-
-      await this.run2D(false);
-      this.updateStageUI(2);
-      this.collapseStageSections(2);
-      this.hideProgress();
-      this.setStatus(nodesCsvFile && edgesCsvFile ? 'CSV graph loaded. Adjust the 2D layout.' : 'Graph loaded. Adjust the 2D layout.');
-    } catch (error) {
-      console.error(error);
-      this.hideProgress();
-      const message = error?.message || 'Failed to load graph.';
-      this.setStatus(message);
-      alert(message);
-    }
-  }
-
-  populateAttributeMenus() {
-    const graph = this.state.graph;
-    const colorAttributes = [...graph.attributes.nodeAll];
-    if (!colorAttributes.includes('color')) colorAttributes.unshift('color');
-    const zAttributes = [...graph.attributes.nodeAll];
-    if (!zAttributes.includes('size') && graph.attributes.nodeNumeric.includes('size')) zAttributes.unshift('size');
-    setOptions(getEl('nodeSizeAttribute'), graph.attributes.nodeNumeric, { includeBlank: true, blankLabel: '— none —' });
-    setOptions(getEl('nodeColorAttribute'), colorAttributes, { includeBlank: true, blankLabel: '— auto —' });
-    setOptions(getEl('zAttribute'), zAttributes, { includeBlank: true, blankLabel: '— none —' });
-
-    if (colorAttributes.length) getEl('nodeColorAttribute').value = colorAttributes[0];
-    if (zAttributes.length) getEl('zAttribute').value = zAttributes[0];
-    if (!graph.attributes.nodeNumeric.length) {
-      getEl('nodeSizeMode').value = 'degree';
-      getEl('zMode').value = graph.flags.hasZPositions ? 'original' : 'degree';
-    }
-
-  }
-
-  renderCategoryFilterValues() {
-    return;
-  }
-
-  applyFilters() {
-    if (this.state.graph) {
-      this.state.visibleMask = new Array(this.state.graph.nodes.length).fill(true);
-      this.setStats();
-      this.renderCurrentView(true);
-      this.updateLegend();
-    }
-  }
-
-  resetFilters() {
-    this.applyFilters();
-  }
-
-  collect2DSettings() {
-
+  capturePresetState() {
     return {
-      positionSource: getEl('positionSource').value,
-      iterations: Number(getEl('layoutIterations').value),
-      gravity: Number(getEl('layoutGravity').value),
-      repulsion: Number(getEl('layoutRepulsion').value),
-      scaleX: Number(getEl('scaleX').value),
-      scaleY: Number(getEl('scaleY').value),
-      nodeSizeMode: getEl('nodeSizeMode').value,
-      nodeSizeAttribute: getEl('nodeSizeAttribute').value,
-      nodeSizeMin: Number(getEl('nodeSizeMin').value),
-      nodeSizeMax: Number(getEl('nodeSizeMax').value),
-      nodeSizeScale: Number(getEl('nodeSizeScale').value),
-      nodeColorMode: getEl('nodeColorMode').value,
-      nodeColorAttribute: getEl('nodeColorAttribute').value,
-      nodeSingleColor: getEl('nodeSingleColor').value,
-      nodeRampColor: getEl('nodeRampColor').value,
-      fa2BarnesHut: getEl('fa2BarnesHut').checked,
-      fa2AdjustSizes: getEl('fa2AdjustSizes').checked,
-      fa2Outbound: getEl('fa2Outbound').checked,
-      fa2LinLog: getEl('fa2LinLog').checked
+      ui: {
+        stylePreset: this.dom.stylePreset.value,
+        solidPreview: this.dom.solidPreview.checked,
+        edgeOpacity: this.dom.edgeOpacity.value,
+        solidRadius: this.dom.solidRadius.value,
+        solidTaper: this.dom.solidTaper.value,
+        nodeSizeMode: this.dom.nodeSizeMode.value,
+        sizeAttr: this.dom.sizeAttr.value,
+        nodeColorMode: this.dom.nodeColorMode.value,
+        colorAttr: this.dom.colorAttr.value,
+        edgeColorMode: this.dom.edgeColorMode.value,
+        constantNodeColor: this.dom.constantNodeColor.value,
+        backgroundColor: this.dom.backgroundColor?.value,
+        focusDim: this.dom.focusDim?.value,
+        displayLayer: this.dom.displayLayer.value,
+        currentMode: this.state.currentMode
+      },
+      camera: {
+        position: this.sceneController.camera.position.toArray(),
+        target: this.sceneController.controls.target.toArray()
+      }
     };
   }
 
-  collect3DSettings() {
-    return {
-      zMode: getEl('zMode').value,
-      zAttribute: getEl('zAttribute').value,
-      zScale: Number(getEl('zScale').value),
-      zJitter: Number(getEl('zJitter').value),
-      zCategoryGap: Number(getEl('zCategoryGap').value)
-    };
-  }
-
-  mapPositionsToGlobe(base2D, radius) {
-    if (!base2D.length) return [];
-    const xs = base2D.map((p) => p.x || 0);
-    const ys = base2D.map((p) => p.y || 0);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    const spanX = Math.max(1e-6, maxX - minX);
-    const spanY = Math.max(1e-6, maxY - minY);
-    const r = Math.max(10, radius);
-
-    return base2D.map((pos) => {
-      const u = ((pos.x || 0) - minX) / spanX;
-      const v = ((pos.y || 0) - minY) / spanY;
-      const lon = (u - 0.5) * Math.PI * 2.0;
-      const lat = (0.5 - v) * Math.PI;
-      const cosLat = Math.cos(lat);
-      return {
-        x: r * cosLat * Math.cos(lon),
-        y: r * Math.sin(lat),
-        z: r * cosLat * Math.sin(lon)
-      };
-    });
-  }
-
-  collectEdgeSettings() {
-    return {
-      algorithm: getEl('edgeMode').value,
-      samples: Number(getEl('bundleSamples').value),
-      hubCount: Number(getEl('bundleHubCount').value),
-      lift: Number(getEl('bundleLift').value),
-      detourCap: Number(getEl('bundleDetour').value),
-      exponent: Number(getEl('legacyExponent').value),
-      excludeDirect: getEl('legacyExcludeDirect').checked,
-      edgeColorMode: getEl('edgeColorMode').value,
-      edgeSingleColor: getEl('edgeSingleColor').value,
-      edgeOpacity: Number(getEl('edgeOpacity').value)
-    };
-  }
-
-  getExportOptions() {
-    return {
-      scale: Math.max(1, Number(getEl('exportScale').value) || 2),
-      transparent: getEl('transparentExport').checked
-    };
-  }
-
-  async run2D(finalize) {
-    const graph = this.state.graph;
-    if (!graph) return;
-    const settings = this.collect2DSettings();
-    const basePositions = await this.compute2DLayout(settings);
-    this.state.base2DPositions = basePositions;
-    this.state.activeView = '2d';
-    this.apply2DVisualPreview();
-    if (!this.state.positions3D.length) this.sceneController.fitToPositions(this.visiblePositions('2d'));
-    this.setStatus(finalize ? '2D layout finalized. Map the graph into 3D.' : '2D layout applied.');
-    if (finalize) this.updateStageUI(3);
-  }
-
-  async compute2DLayout(settings) {
-    const graph = this.state.graph;
-    if (settings.positionSource !== 'forceatlas2') {
-      const positions = this.computeFast2DLayout(settings.positionSource, graph);
-      return positions.map((p, index) => this.state.pinnedNodes.has(index) && this.state.pinnedBasePositions[index] ? { ...this.state.pinnedBasePositions[index] } : p);
-    }
-
-    this.showProgress('Computing ForceAtlas2 layout…');
-    if (this.layoutWorker) this.layoutWorker.terminate();
-    this.layoutWorker = new Worker(new URL('./workers/layoutWorker.js', import.meta.url), { type: 'module' });
-    const pinned = Array.from(this.state.pinnedNodes).map((index) => ({ index, x: this.state.pinnedBasePositions[index]?.x ?? this.state.base2DPositions[index]?.x ?? 0, y: this.state.pinnedBasePositions[index]?.y ?? this.state.base2DPositions[index]?.y ?? 0 }));
-
-    return new Promise((resolve, reject) => {
-      this.layoutWorker.onmessage = (event) => {
-        const { type, positions, percent, message } = event.data;
-        if (type === 'progress') return this.setProgress(percent);
-        if (type === 'error') {
-          this.hideProgress();
-          this.layoutWorker?.terminate();
-          this.layoutWorker = null;
-          reject(new Error(message || 'ForceAtlas2 failed.'));
-          return;
+  applyPresetState(preset) {
+    if (preset?.ui) {
+      Object.entries(preset.ui).forEach(([key, value]) => {
+        const el = this.dom[key];
+        if (el != null) {
+          if (el.type === 'checkbox') el.checked = !!value;
+          else el.value = value;
         }
-        if (type === 'result') {
-          this.hideProgress();
-          this.layoutWorker.terminate();
-          this.layoutWorker = null;
-          resolve(positions.map((p, index) => this.state.pinnedNodes.has(index) && this.state.pinnedBasePositions[index] ? { ...this.state.pinnedBasePositions[index] } : p));
-        }
-      };
-      this.layoutWorker.onerror = (error) => {
-        this.hideProgress();
-        this.layoutWorker?.terminate();
-        this.layoutWorker = null;
-        reject(error);
-      };
-      this.layoutWorker.postMessage({
-        nodes: graph.nodes.map((node) => ({ x: node.x, y: node.y, size: node.size })),
-        edges: graph.edges.map((edge) => ({ sourceIndex: edge.sourceIndex, targetIndex: edge.targetIndex, weight: edge.weight })),
-        iterations: settings.iterations,
-        gravity: settings.gravity,
-        repulsion: settings.repulsion,
-        barnesHutOptimize: settings.fa2BarnesHut,
-        adjustSizes: settings.fa2AdjustSizes,
-        outboundAttractionDistribution: settings.fa2Outbound,
-        linLogMode: settings.fa2LinLog,
-        pinned
-      });
-    });
-  }
-
-  computeFast2DLayout(mode, graph) {
-    const nodes = graph.nodes;
-    const count = nodes.length;
-    if (mode === 'existing') {
-      const hasExisting = nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y));
-      if (hasExisting) return nodes.map((node) => ({ x: node.x, y: node.y }));
-      mode = 'random';
-    }
-    if (mode === 'circular') {
-      const radius = Math.max(10, Math.sqrt(count) * 3);
-      return nodes.map((_, i) => {
-        const angle = (i / Math.max(1, count)) * Math.PI * 2;
-        return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
       });
     }
-    if (mode === 'grid') {
-      const side = Math.ceil(Math.sqrt(count));
-      const spacing = 5;
-      return nodes.map((_, i) => {
-        const row = Math.floor(i / side);
-        const col = i % side;
-        return { x: (col - side / 2) * spacing, y: (row - side / 2) * spacing };
-      });
+    if (preset?.camera?.position && preset?.camera?.target) {
+      this.sceneController.camera.position.fromArray(preset.camera.position);
+      this.sceneController.controls.target.fromArray(preset.camera.target);
+      this.sceneController.controls.update();
     }
-    if (mode === 'radial') {
-      const indexed = nodes.map((node, i) => ({ i, score: graph.metrics?.degree?.[i] || Number(node.size) || 1 }));
-      indexed.sort((a, b) => b.score - a.score);
-      const positions = new Array(count);
-      indexed.forEach((entry, rank) => {
-        const ring = Math.floor(Math.sqrt(rank));
-        const ringSize = Math.max(6, ring * 8);
-        const idxInRing = rank - (ring * ring);
-        const angle = (idxInRing / ringSize) * Math.PI * 2;
-        const radius = 8 + ring * 7;
-        positions[entry.i] = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-      });
-      return positions;
-    }
-    return nodes.map((_, i) => ({
-      x: (Math.random() - 0.5) * Math.max(30, Math.sqrt(count) * 4) + (i % 3),
-      y: (Math.random() - 0.5) * Math.max(30, Math.sqrt(count) * 4) - (i % 5)
-    }));
+    if (preset?.ui?.currentMode) this.setMode(preset.ui.currentMode);
+    this.applyStylePresetUi();
+    this.state.displayLayer = this.dom.displayLayer.value;
+    this.refreshEncodingsAndLayers();
   }
 
-  apply2DVisualPreview() {
-    const graph = this.state.graph;
-    if (!graph || !this.state.base2DPositions.length) return;
-    const settings = this.collect2DSettings();
-    this.state.positions2D = this.state.base2DPositions.map((p, index) => {
-      const base = this.state.pinnedNodes.has(index) && this.state.pinnedBasePositions[index] ? this.state.pinnedBasePositions[index] : p;
-      return { x: base.x * settings.scaleX, y: base.y * settings.scaleY, z: 0 };
-    });
-    this.computeNodeEncodings(settings);
-    if (this.state.activeView === '2d' || !this.state.positions3D.length) this.renderCurrentView();
-    else this.run3D(false);
+  exportPng() {
+    const dataUrl = this.sceneController.exportPng({ scale: this.state.quality === 'export' ? 2.5 : 2, transparent: true });
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `${this.safeFileStem()}.png`;
+    a.click();
   }
 
-  getNodeAttrValue(node, attrName) {
-    if (!attrName) return undefined;
-    if (attrName === 'color') return this.getOriginalNodeColor(node);
-    if (attrName === 'size') return node.size;
-    if (Object.prototype.hasOwnProperty.call(node.attrs, attrName)) return node.attrs[attrName];
-    const foundKey = Object.keys(node.attrs).find((key) => key.toLowerCase() === String(attrName).toLowerCase());
-    return foundKey ? node.attrs[foundKey] : undefined;
-  }
-
-  getOriginalNodeColor(node) {
-    return node.color ?? node.attrs.color ?? node.attrs.Color ?? node.attrs.colour ?? node.attrs.Colour;
-  }
-
-  coerceNumeric(value) {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) return NaN;
-      const parsed = Number(trimmed);
-      if (Number.isFinite(parsed) && /^[-+]?\d*\.?\d+(e[-+]?\d+)?$/i.test(trimmed)) return parsed;
-    }
-    return NaN;
-  }
-
-  computeNodeEncodings(settings) {
-    const graph = this.state.graph;
-    const nodeSizes = new Array(graph.nodes.length);
-    const nodeColors = new Array(graph.nodes.length);
-    let sizeValues = graph.nodes.map(() => 1);
-
-    if (settings.nodeSizeMode === 'degree') sizeValues = [...graph.metrics.degree];
-    else if (settings.nodeSizeMode === 'weightedDegree') sizeValues = [...graph.metrics.weightedDegree];
-    else if (settings.nodeSizeMode === 'attribute') sizeValues = graph.nodes.map((node) => this.coerceNumeric(this.getNodeAttrValue(node, settings.nodeSizeAttribute)));
-    else if (settings.nodeSizeMode === 'original') sizeValues = graph.nodes.map((node) => this.coerceNumeric(node.size));
-
-    const finiteSizes = sizeValues.filter((value) => Number.isFinite(value));
-    const minValue = finiteSizes.length ? Math.min(...finiteSizes) : 0;
-    const maxValue = finiteSizes.length ? Math.max(...finiteSizes) : 1;
-    for (let i = 0; i < graph.nodes.length; i += 1) {
-      const normalized = Number.isFinite(sizeValues[i]) ? (sizeValues[i] - minValue) / ((maxValue - minValue) || 1) : 0;
-      const base = settings.nodeSizeMode === 'constant'
-        ? settings.nodeSizeMin
-        : settings.nodeSizeMin + normalized * (settings.nodeSizeMax - settings.nodeSizeMin);
-      nodeSizes[i] = Math.max(0.0001, base * settings.nodeSizeScale);
-    }
-    this.state.nodeSizeMeta = { mode: settings.nodeSizeMode, min: minValue, max: maxValue, attribute: settings.nodeSizeAttribute };
-
-    const background = hexToColor(getEl('backgroundColor').value);
-    let numericRange = null;
-    let literalColorRatio = 0;
-    let categoricalCount = 0;
-    let categoryMap = null;
-    let colorMeta = { mode: settings.nodeColorMode };
-
-    if (settings.nodeColorMode === 'attribute') {
-      const values = graph.nodes.map((node) => this.getNodeAttrValue(node, settings.nodeColorAttribute));
-      const numericValues = values.map((value) => this.coerceNumeric(value)).filter((value) => Number.isFinite(value));
-      const parsedLiteralColors = values.map((value) => parseLiteralColor(value));
-      literalColorRatio = parsedLiteralColors.filter(Boolean).length / Math.max(1, values.length);
-      categoricalCount = new Set(values.filter((value) => value != null && String(value).trim() !== '').map((value) => String(value))).size;
-      if (numericValues.length && literalColorRatio < 0.5) {
-        numericRange = { min: Math.min(...numericValues), max: Math.max(...numericValues) };
-        colorMeta = { mode: 'numeric', attribute: settings.nodeColorAttribute, ...numericRange, start: settings.nodeSingleColor, end: settings.nodeRampColor };
-      } else if (literalColorRatio > 0.6) {
-        colorMeta = { mode: 'literal', attribute: settings.nodeColorAttribute };
-      } else {
-        categoryMap = new Map();
-        colorMeta = { mode: 'categorical', attribute: settings.nodeColorAttribute, categories: categoryMap };
-      }
-      if (literalColorRatio > 0.6) getEl('nodeColorHint').textContent = 'The selected attribute contains explicit colors. They are now used directly.';
-      else if (numericRange) getEl('nodeColorHint').textContent = 'The selected attribute is numeric. Nodes use a continuous color ramp.';
-      else getEl('nodeColorHint').textContent = `The selected attribute is treated as categorical (${categoricalCount} categories detected).`;
-    } else if (settings.nodeColorMode === 'original') {
-      getEl('nodeColorHint').textContent = 'Using original node colors from the uploaded graph when available.';
-      colorMeta = { mode: 'original' };
-    } else {
-      getEl('nodeColorHint').textContent = 'Single color mode applies one consistent color to all nodes.';
-      colorMeta = { mode: 'single', color: settings.nodeSingleColor };
-    }
-
-    for (let i = 0; i < graph.nodes.length; i += 1) {
-      const node = graph.nodes[i];
-      let color = boostVisibility(hexToColor(settings.nodeSingleColor), 0.06);
-      if (settings.nodeColorMode === 'single') {
-        color = hexToColor(settings.nodeSingleColor);
-      } else if (settings.nodeColorMode === 'original') {
-        color = parseLiteralColor(this.getOriginalNodeColor(node)) || hexToColor(settings.nodeSingleColor);
-      } else if (settings.nodeColorMode === 'attribute') {
-        const value = this.getNodeAttrValue(node, settings.nodeColorAttribute);
-        const literalColor = parseLiteralColor(value);
-        const numericValue = this.coerceNumeric(value);
-        if (literalColor) {
-          color = literalColor;
-        } else if (numericRange && Number.isFinite(numericValue)) {
-          color = numericRamp(numericValue, numericRange.min, numericRange.max, settings.nodeSingleColor, settings.nodeRampColor);
-        } else if (value != null && String(value).trim() !== '') {
-          color = categoricalColor(value);
-          if (categoryMap && !categoryMap.has(String(value))) categoryMap.set(String(value), color.clone());
-        } else {
-          color = parseLiteralColor(this.getOriginalNodeColor(node)) || hexToColor(settings.nodeSingleColor);
-        }
-      }
-      color = ensureContrast(color, background, 0.12);
-      if (colorLuminance(background) < 0.45) color = boostVisibility(color, 0.12);
-      nodeColors[i] = color;
-    }
-
-    this.state.nodeSizes = nodeSizes;
-    this.state.nodeColors = nodeColors;
-    this.state.nodeColorMeta = colorMeta;
-  }
-
-  getCategoricalLayerMap(attrName) {
-    const graph = this.state.graph;
-    const values = graph.nodes.map((node) => this.getNodeAttrValue(node, attrName)).filter((value) => value != null && String(value).trim() !== '');
-    const counts = new Map();
-    values.forEach((value) => counts.set(String(value), (counts.get(String(value)) || 0) + 1));
-    const ordered = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    return new Map(ordered.map(([value], index) => [value, index]));
-  }
-
-  async run3D(finalize) {
-    const graph = this.state.graph;
-    if (!graph || !this.state.positions2D.length) return;
-    const settings = this.collect3DSettings();
-    const base2D = clonePositions(this.state.positions2D);
-    let numericRange = null;
-    let categoricalLayerMap = null;
-
-    if (settings.zMode === 'attribute') {
-      const rawValues = graph.nodes.map((node) => this.getNodeAttrValue(node, settings.zAttribute));
-      const numericValues = rawValues.map((value) => this.coerceNumeric(value)).filter((value) => Number.isFinite(value));
-      if (numericValues.length >= Math.max(3, Math.floor(graph.nodes.length * 0.5))) {
-        numericRange = { min: Math.min(...numericValues), max: Math.max(...numericValues) };
-      } else {
-        categoricalLayerMap = this.getCategoricalLayerMap(settings.zAttribute);
-      }
-    }
-
-    if (settings.zMode === 'globe') {
-      this.state.positions3D = this.mapPositionsToGlobe(base2D, settings.zScale * 8);
-      if (settings.zJitter > 0) {
-        this.state.positions3D = this.state.positions3D.map((pos) => {
-          const dir = new THREE.Vector3(pos.x, pos.y, pos.z).normalize();
-          const delta = (Math.random() - 0.5) * settings.zJitter * 2;
-          return { x: pos.x + dir.x * delta, y: pos.y + dir.y * delta, z: pos.z + dir.z * delta };
-        });
-      }
-    } else {
-      this.state.positions3D = base2D.map((pos, index) => {
-        const node = graph.nodes[index];
-        let z = 0;
-        if (settings.zMode === 'original') z = Number.isFinite(node.z) ? node.z : 0;
-        else if (settings.zMode === 'random') z = (Math.random() - 0.5) * settings.zScale * 10;
-        else if (settings.zMode === 'degree') z = graph.metrics.degree[index];
-        else if (settings.zMode === 'weightedDegree') z = graph.metrics.weightedDegree[index];
-        else if (settings.zMode === 'attribute') {
-          const raw = this.getNodeAttrValue(node, settings.zAttribute);
-          const numeric = this.coerceNumeric(raw);
-          if (numericRange && Number.isFinite(numeric)) {
-            const t = (numeric - numericRange.min) / ((numericRange.max - numericRange.min) || 1);
-            z = (t - 0.5) * 2 * settings.zScale * 10;
-          } else if (categoricalLayerMap && raw != null && String(raw).trim() !== '') {
-            const layer = categoricalLayerMap.get(String(raw)) || 0;
-            const centered = layer - ((categoricalLayerMap.size - 1) / 2);
-            z = centered * settings.zCategoryGap;
-          }
-        }
-        if (settings.zMode !== 'random' && settings.zMode !== 'attribute') z *= settings.zScale;
-        if (settings.zJitter > 0) z += (Math.random() - 0.5) * settings.zJitter * 10;
-        return { x: pos.x, y: pos.y, z };
-      });
-    }
-
-    this.state.activeView = '3d';
-    this.renderCurrentView(true);
-    this.sceneController.fitToPositions(this.visiblePositions('3d'));
-    this.setStatus(finalize
-      ? (settings.zMode === 'globe' ? 'Globe mapping finalized. Draw edges or run bundling.' : '3D mapping finalized. Draw edges or run bundling.')
-      : (settings.zMode === 'globe' ? 'Globe mapping applied.' : '3D mapping applied.'));
-    if (finalize) this.updateStageUI(4);
-  }
-
-  currentPositions() {
-    if (this.state.activeView === '3d' && this.state.positions3D.length) return this.state.positions3D;
-    if (this.state.positions2D.length) return this.state.positions2D;
-    if (this.state.positions3D.length) return this.state.positions3D;
-    return [];
-  }
-
-  visiblePositions(view = null) {
-    const positions = view === '3d' ? this.state.positions3D : view === '2d' ? this.state.positions2D : this.currentPositions();
-    if (!positions.length) return [];
-    const mask = this.state.visibleMask?.length ? this.state.visibleMask : positions.map(() => true);
-    const visible = positions.filter((_, i) => mask[i]);
-    return visible.length ? visible : positions;
-  }
-
-  getFocusSet() {
-    const graph = this.state.graph;
-    const focus = new Set();
-    if (!graph) return focus;
-    const hover = this.state.hoveredNodeIndex;
-    const selected = this.state.selectedNodeIndex;
-    if (hover != null && hover >= 0) {
-      focus.add(hover);
-      for (const neighbor of graph.metrics.neighbors[hover] || []) focus.add(neighbor);
-    }
-    if (selected != null && selected >= 0) {
-      focus.add(selected);
-      for (const neighbor of graph.metrics.neighbors[selected] || []) focus.add(neighbor);
-    }
-    return focus;
-  }
-
-  displayedNodeColors() {
-    const colors = this.state.nodeColors.map((color) => color.clone());
-    const focus = this.getFocusSet();
-    if (!focus.size) return colors;
-    return colors.map((color, index) => focus.has(index) ? boostVisibility(color, 0.16) : color);
-  }
-
-  renderCurrentView(resetEdges = true) {
-    this.renderNodes();
-    if (resetEdges || this.state.edgeLayer.kind !== 'custom' || !this.edgeRenderer.lastDraw.polylines.length) this.drawPreviewEdges();
-    else this.redrawCurrentEdgeAppearance();
-    this.updateLegend();
-    this.sceneController.render();
-  }
-
-  renderNodes() {
-    const positions = this.currentPositions();
-    if (!positions.length) return;
-    const focus = this.getFocusSet();
-    this.nodeRenderer.update({
-      positions,
-      sizes: this.state.nodeSizes.length ? this.state.nodeSizes : positions.map(() => 1),
-      colors: this.displayedNodeColors(),
-      detail: Number(getEl('nodeDetail').value),
-      visibleMask: this.state.visibleMask,
-      emphasisSet: focus,
-      selectedIndex: this.state.selectedNodeIndex ?? -1,
-      viewportHeight: this.sceneController.getViewportSize().height
-    });
-    this.renderLabels();
-    this.sceneController.render();
-  }
-
-  renderLabels() {
-    const graph = this.state.graph;
-    const positions = this.currentPositions();
-    if (!graph || !positions.length) {
-      this.labelRenderer.clear();
-      return;
-    }
-    const focus = [];
-    if (this.state.selectedNodeIndex != null) focus.push(this.state.selectedNodeIndex);
-    if (this.state.hoveredNodeIndex != null) focus.push(this.state.hoveredNodeIndex);
-    this.labelRenderer.update({
-      labelsEnabled: getEl('showLabels').checked,
-      count: Number(getEl('labelCount').value),
-      fontSize: Number(getEl('labelSize').value),
-      nodes: graph.nodes,
-      positions,
-      metrics: graph.metrics,
+  exportSvg() {
+    if (!this.state.graph) return;
+    const viewport = this.sceneController.getViewportSize();
+    const svg = buildSceneSvg({
       camera: this.sceneController.camera,
-      viewportWidth: this.dom.canvas.clientWidth,
-      viewportHeight: this.dom.canvas.clientHeight,
-      background: hexToColor(getEl('backgroundColor').value),
-      visibleMask: this.state.visibleMask,
-      focusIndexes: focus
+      width: viewport.width,
+      height: viewport.height,
+      background: this.dom.backgroundColor?.value || getStylePreset(this.dom.stylePreset.value).background,
+      transparent: false,
+      positions: this.state.positions3D,
+      sizes: this.state.nodeSizes,
+      nodeColors: this.state.nodeColors,
+      polylines: this.edgeRenderer.lastDraw.polylines,
+      edgeColors: this.edgeRenderer.lastDraw.colors,
+      edgeOpacity: this.edgeRenderer.lastDraw.opacity,
+      labels: this.labelRenderer.exportLabels(this.state.graph.nodes, this.state.positions3D)
     });
+    downloadText(svg, `${this.safeFileStem()}.svg`, 'image/svg+xml;charset=utf-8');
   }
 
-  projectLabels(camera) {
-    const positions = this.currentPositions();
-    if (!positions.length) {
-      this.state.screenNodeCache = [];
-      return;
-    }
-    this.labelRenderer.project(positions, camera, this.dom.canvas.clientWidth, this.dom.canvas.clientHeight);
-  }
-
-  updateScreenNodeCache(camera = this.sceneController.camera) {
-    const positions = this.currentPositions();
-    if (!positions.length) {
-      this.state.screenNodeCache = [];
-      return;
-    }
-    camera.updateMatrixWorld();
-    camera.updateProjectionMatrix();
-    const rect = this.dom.canvas.getBoundingClientRect();
-    const width = rect.width || this.dom.canvas.clientWidth || 1;
-    const height = rect.height || this.dom.canvas.clientHeight || 1;
-    const temp = new THREE.Vector3();
-    this.state.screenNodeCache = positions.map((p, i) => {
-      temp.set(Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0).project(camera);
-      return {
-        x: (temp.x * 0.5 + 0.5) * width,
-        y: (-temp.y * 0.5 + 0.5) * height,
-        z: temp.z,
-        size: this.state.nodeSizes[i] || 1,
-        visible: !this.state.visibleMask?.length || !!this.state.visibleMask[i]
-      };
+  exportState() {
+    if (!this.state.graph) return;
+    const text = serializeStudioState({
+      graphName: this.state.graphName,
+      activeMethod: this.state.activeMethod,
+      quality: this.state.quality,
+      displayLayer: this.state.displayLayer,
+      positions2D: this.state.positions2D,
+      positions3D: this.state.positions3D,
+      mappedPositions3D: this.state.mappedPositions3D,
+      rawEdgeLookup: this.state.rawEdgeLookup,
+      bundleEdgeLookup: this.state.bundleEdgeLookup,
+      bundleMetrics: this.state.bundleMetrics,
+      skeletonStats: this.state.skeletonStats,
+      ui: this.capturePresetState().ui
     });
+    downloadText(text, `${this.safeFileStem()}-state.json`);
   }
 
-  updateLegend() {
-    const visible = this.isLegendEnabled();
-    this.dom.legendPanel.classList.toggle('hidden', !visible || !this.state.graph);
-    if (!visible || !this.state.graph) return;
-
-    const sections = [];
-    const colorMeta = this.state.nodeColorMeta || { mode: 'single', color: getEl('nodeSingleColor').value };
-    if (colorMeta.mode === 'single') {
-      sections.push(`<div class="legend-section"><div class="legend-title">Node color</div><div class="legend-row"><span class="swatch" style="background:${escapeHtml(colorMeta.color || getEl('nodeSingleColor').value)}"></span><span>Single color</span></div></div>`);
-    } else if (colorMeta.mode === 'numeric') {
-      sections.push(`<div class="legend-section"><div class="legend-title">Node color · ${escapeHtml(colorMeta.attribute || '')}</div><div class="ramp" style="background:linear-gradient(90deg, ${escapeHtml(colorMeta.start)}, ${escapeHtml(colorMeta.end)})"></div><div class="ramp-labels"><span>${formatValue(colorMeta.min ?? 0, 2)}</span><span>${formatValue(colorMeta.max ?? 1, 2)}</span></div></div>`);
-    } else if (colorMeta.mode === 'categorical') {
-      const rows = Array.from(colorMeta.categories?.entries?.() || []).slice(0, 10).map(([label, color]) => `<div class="legend-row"><span class="swatch" style="background:${colorToCss(color)}"></span><span title="${escapeHtml(label)}">${escapeHtml(label)}</span></div>`).join('');
-      sections.push(`<div class="legend-section"><div class="legend-title">Node color · ${escapeHtml(colorMeta.attribute || '')}</div>${rows || '<div class="hint subtle">Category colors will appear after rendering.</div>'}</div>`);
-    } else if (colorMeta.mode === 'literal' || colorMeta.mode === 'original') {
-      const seen = new Set();
-      const sampleRows = [];
-      for (const c of (this.state.nodeColors || []).filter(Boolean)) {
-        const hex = `#${(c?.getHexString ? c.getHexString() : hexToColor(c).getHexString())}`;
-        if (seen.has(hex)) continue;
-        seen.add(hex);
-        sampleRows.push(`<div class="legend-row"><span class="swatch" style="background:${hex}"></span><span>${hex}</span></div>`);
-        if (sampleRows.length >= 8) break;
-      }
-      const fallbackText = colorMeta.mode === 'original' ? 'Using original colors stored in the graph.' : 'Using literal colors stored in the selected attribute.';
-      sections.push(`<div class="legend-section"><div class="legend-title">Node color</div>${sampleRows.join('') || `<div class="hint subtle">${fallbackText}</div>`}</div>`);
-    }
-
-    const sizeMeta = this.state.nodeSizeMeta;
-    if (sizeMeta) {
-      const sizes = [0.7, 1.2, 1.8].map((s) => `<span class="size-dot" style="width:${12 * s}px;height:${12 * s}px"></span>`).join('');
-      const title = sizeMeta.mode === 'attribute' ? `Node size · ${escapeHtml(sizeMeta.attribute || '')}` : `Node size · ${escapeHtml(sizeMeta.mode)}`;
-      const minText = Number.isFinite(sizeMeta.min) ? formatValue(sizeMeta.min, 2) : 'low';
-      const maxText = Number.isFinite(sizeMeta.max) ? formatValue(sizeMeta.max, 2) : 'high';
-      sections.push(`<div class="legend-section"><div class="legend-title">${title}</div><div class="size-dots">${sizes}</div><div class="ramp-labels"><span>${minText}</span><span>${maxText}</span></div></div>`);
-    }
-
-    const visibleCount = this.state.visibleMask?.filter(Boolean).length || this.state.graph.nodes.length;
-    sections.push(`<div class="legend-section"><div class="legend-title">Scene</div><div class="legend-row"><span>${visibleCount.toLocaleString()} visible nodes</span></div></div>`);
-    this.dom.legendContent.innerHTML = sections.join('');
+  safeFileStem() {
+    return String(this.state.graphName || 'network-studio')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'network-studio';
   }
 
-  applyViewSettings() {
-    this.sceneController.setBackground(getEl('backgroundColor').value);
+  onRenderFrame() {
     if (this.state.graph) {
-      this.computeNodeEncodings(this.collect2DSettings());
-      this.renderNodes();
-      if (this.state.edgeLayer.kind === 'custom' && this.edgeRenderer.lastDraw.polylines.length) this.redrawCurrentEdgeAppearance();
-      else this.drawPreviewEdges();
-    } else {
-      this.renderLabels();
+      this.labelRenderer.project(this.state.positions3D, this.sceneController.camera, this.dom.viewport.clientWidth, this.dom.viewport.clientHeight);
     }
-    this.updateLegend();
   }
 
-  visibleEdgeIndexes() {
-    const graph = this.state.graph;
-    const mask = this.state.visibleMask?.length ? this.state.visibleMask : null;
-    if (!graph) return [];
-    if (!mask) return graph.edges.map((_, index) => index);
-    const indexes = [];
-    for (let i = 0; i < graph.edges.length; i += 1) {
-      const edge = graph.edges[i];
-      if (mask[edge.sourceIndex] && mask[edge.targetIndex]) indexes.push(i);
-    }
-    return indexes;
-  }
-
-  previewEdgeSelection(positions, algorithm = 'straight') {
-    const graph = this.state.graph;
-    if (!graph || !positions.length) return { edges: [], indexes: [], subset: null };
-    const pointBudget = Math.max(2000, Number(getEl('pointBudget').value) || 300000);
-    const samples = Math.max(2, Number(getEl('bundleSamples').value) || 8);
-    const multiplier = algorithm === 'straight' ? 2 : Math.max(4, samples * 2);
-    const maxPreviewEdges = Math.max(120, Math.floor(pointBudget / multiplier));
-    const visibleIndexes = this.visibleEdgeIndexes();
-    if (visibleIndexes.length <= maxPreviewEdges) {
-      return { edges: visibleIndexes.map((index) => graph.edges[index]), indexes: visibleIndexes, subset: null };
-    }
-    const sampleIndexes = evenlySampleIndexes(visibleIndexes.length, maxPreviewEdges).map((index) => visibleIndexes[index]);
-    return {
-      edges: sampleIndexes.map((index) => graph.edges[index]),
-      indexes: sampleIndexes,
-      subset: { drawn: sampleIndexes.length, total: visibleIndexes.length }
-    };
-  }
-
-  edgeColorsForIndexes(indexes, settings) {
-    const graph = this.state.graph;
-    const bg = hexToColor(getEl('backgroundColor').value);
-    const focus = this.getFocusSet();
-    return indexes.map((edgeIndex) => {
-      const edge = graph.edges[edgeIndex];
-      let color = settings.edgeColorMode === 'source' ? (this.state.nodeColors[edge.sourceIndex] || hexToColor(settings.edgeSingleColor)) : hexToColor(settings.edgeSingleColor);
-      if (focus.size && !focus.has(edge.sourceIndex) && !focus.has(edge.targetIndex)) color = mixColors(color, bg, 0.76);
-      return color;
-    });
-  }
-
-  drawPreviewEdges() {
-    const graph = this.state.graph;
-    const positions = this.currentPositions();
-    if (!graph || !positions.length) return;
-    const previewSettings = {
-      edgeColorMode: getEl('edgeColorMode').value,
-      edgeSingleColor: getEl('edgeSingleColor').value,
-      edgeOpacity: Math.min(0.4, Math.max(0.08, Number(getEl('edgeOpacity').value) || 0.18))
-    };
-    const { edges, indexes } = this.previewEdgeSelection(positions, 'straight');
-    const polylines = edges.map((edge) => [positions[edge.sourceIndex], positions[edge.targetIndex]]);
-    const colors = this.edgeColorsForIndexes(indexes, previewSettings);
-    this.edgeRenderer.drawPolylines({ polylines, colors, opacity: previewSettings.edgeOpacity });
-    this.state.edgeLayer = { kind: 'preview', edgeIndexes: indexes };
-    this.sceneController.render();
-  }
-
-  redrawCurrentEdgeAppearance() {
-    const last = this.edgeRenderer.lastDraw;
-    if (!last?.polylines?.length) {
-      this.drawPreviewEdges();
-      return;
-    }
-    const settings = this.collectEdgeSettings();
-    const edgeIndexes = this.state.edgeLayer.edgeIndexes || [];
-    const colors = edgeIndexes.length ? this.edgeColorsForIndexes(edgeIndexes, settings) : last.colors;
-    this.edgeRenderer.drawPolylines({ polylines: last.polylines, colors, opacity: settings.edgeOpacity });
-    this.sceneController.render();
-  }
-
-  async drawEdges() {
-    const graph = this.state.graph;
-    const positions = this.currentPositions();
-    if (!graph || !positions.length) return;
-    const settings = this.collectEdgeSettings();
-    const selection = this.previewEdgeSelection(positions, settings.algorithm === 'straight' ? 'straight' : 'curved');
-    const selectedEdges = selection.edges;
-    const selectedIndexes = selection.indexes;
-    const colors = this.edgeColorsForIndexes(selectedIndexes, settings);
-
-    if (settings.algorithm === 'straight') {
-      const polylines = selectedEdges.map((edge) => [positions[edge.sourceIndex], positions[edge.targetIndex]]);
-      this.edgeRenderer.drawPolylines({ polylines, colors, opacity: settings.edgeOpacity });
-      this.state.edgeLayer = { kind: 'custom', edgeIndexes: selectedIndexes };
-      this.setStatus(selection.subset ? `Straight edges drawn for ${selection.subset.drawn.toLocaleString()} of ${selection.subset.total.toLocaleString()} visible edges.` : 'Straight edges drawn.');
-      this.sceneController.render();
-      return;
-    }
-
-    this.showProgress(`Running ${settings.algorithm} edge bundling…`);
-    if (this.bundleWorker) this.bundleWorker.terminate();
-    this.bundleWorker = new Worker(new URL('./workers/bundleWorker.js', import.meta.url), { type: 'module' });
-
-    this.bundleWorker.onmessage = (event) => {
-      const { type, polylines, percent } = event.data;
-      if (type === 'progress') return this.setProgress(percent);
-      if (type === 'result') {
-        this.hideProgress();
-        this.bundleWorker?.terminate();
-        this.bundleWorker = null;
-        this.edgeRenderer.drawPolylines({ polylines, colors, opacity: settings.edgeOpacity });
-        this.state.edgeLayer = { kind: 'custom', edgeIndexes: selectedIndexes };
-        this.setStatus(selection.subset ? `Bundled ${selection.subset.drawn.toLocaleString()} of ${selection.subset.total.toLocaleString()} visible edges.` : 'Edges drawn.');
-        this.sceneController.render();
-      }
-    };
-
-    this.bundleWorker.onerror = (error) => {
-      console.error(error);
-      this.hideProgress();
-      this.bundleWorker?.terminate();
-      this.bundleWorker = null;
-      this.setStatus('Edge bundling failed.');
-      alert('Edge bundling failed. Check the console for details.');
-    };
-
-    this.bundleWorker.postMessage({
-      nodes: positions.map((pos, index) => ({ id: graph.nodes[index].id, x: pos.x, y: pos.y, z: pos.z })),
-      edges: selectedEdges.map((edge) => ({ sourceIndex: edge.sourceIndex, targetIndex: edge.targetIndex })),
-      algorithm: settings.algorithm,
-      samples: settings.samples,
-      hubCount: settings.hubCount,
-      lift: settings.lift,
-      detourCap: settings.detourCap,
-      exponent: settings.exponent,
-      excludeDirect: settings.excludeDirect,
-      degree: [...graph.metrics.degree]
-    });
-  }
-
-  normalizedPointerFromEvent(event) {
-    const rect = this.dom.canvas.getBoundingClientRect();
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  pointerFromEvent(event) {
+    const rect = this.dom.viewport.getBoundingClientRect();
+    this.pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     return rect;
   }
 
-  pickNodeIndexFromEvent(event) {
-    if (!this.state.graph) return -1;
-    const rect = this.normalizedPointerFromEvent(event);
-    const camera = this.sceneController.camera;
-    camera.updateMatrixWorld();
-    camera.updateProjectionMatrix();
-
-    const cache = this.state.screenNodeCache?.length ? this.state.screenNodeCache : null;
-    const positions = this.currentPositions();
-    let bestIndex = -1;
-    let bestDist2 = Infinity;
-
-    const temp = new THREE.Vector3();
-    for (let i = 0; i < positions.length; i += 1) {
-      if (this.state.visibleMask?.length && !this.state.visibleMask[i]) continue;
-      const entry = cache ? cache[i] : null;
-      let sx;
-      let sy;
-      let sz;
-      let renderedSize;
-
-      if (entry) {
-        sx = entry.x;
-        sy = entry.y;
-        sz = entry.z;
-        renderedSize = entry.size;
-      } else {
-        const p = positions[i] || { x: 0, y: 0, z: 0 };
-        temp.set(Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0).project(camera);
-        sx = (temp.x * 0.5 + 0.5) * rect.width;
-        sy = (-temp.y * 0.5 + 0.5) * rect.height;
-        sz = temp.z;
-        renderedSize = this.state.nodeSizes[i] || 1;
-      }
-
-      if (sz < -1 || sz > 1) continue;
-      const dx = (event.clientX - rect.left) - sx;
-      const dy = (event.clientY - rect.top) - sy;
-      const d2 = dx * dx + dy * dy;
-      const pickRadius = Math.max(12, renderedSize * 4.2 + 7);
-      if (d2 <= pickRadius * pickRadius && d2 < bestDist2) {
-        bestDist2 = d2;
+  pickNodeIndex(event) {
+    if (!this.state.graph || !this.state.positions3D?.length || !this.state.showNodes) return null;
+    const rect = this.pointerFromEvent(event);
+    const graph = this.state.graph;
+    let bestIndex = null;
+    let bestScore = Infinity;
+    for (let i = 0; i < graph.nodes.length; i += 1) {
+      if (!this.state.visibleMask[i]) continue;
+      const pos = this.state.positions3D[i];
+      if (!pos) continue;
+      const projected = new THREE.Vector3(pos.x, pos.y, pos.z || 0).project(this.sceneController.camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+      const sx = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
+      const sy = (-projected.y * 0.5 + 0.5) * rect.height + rect.top;
+      const dx = event.clientX - sx;
+      const dy = event.clientY - sy;
+      const dist2 = dx * dx + dy * dy;
+      const radius = Math.max(8, Math.min(30, (Number(this.state.nodeSizes[i]) || 1) * 4.5));
+      if (dist2 <= radius * radius && dist2 < bestScore) {
+        bestScore = dist2;
         bestIndex = i;
       }
     }
@@ -1598,19 +1894,22 @@ export class App {
   }
 
   handlePointerDown(event) {
-    const picked = this.pickNodeIndexFromEvent(event);
-    const canDrag = this.state.activeView === '2d' && this.isDragEditEnabled() && !this.isSelectionModifier(event);
-    if (canDrag && picked >= 0 && event.button === 0) {
-      const current = this.state.positions2D[picked];
-      if (!current) return;
-      this.normalizedPointerFromEvent(event);
-      this.raycaster.setFromCamera(this.pointer, this.sceneController.camera);
-      this.dragPlane.constant = -(current.z || 0);
+    if (this.state.currentMode === 'load2d' && this.state.displayLayer !== 'raw') {
+      this.dom.displayLayer.value = 'raw';
+      this.state.displayLayer = 'raw';
+      this.refreshVisibleLayer();
+    }
+    const picked = this.pickNodeIndex(event);
+    const canDrag = this.state.currentMode === 'load2d' && this.state.displayLayer === 'raw' && picked != null && event.button === 0;
+    if (canDrag) {
+      const current = this.state.positions3D[picked] || this.state.positions2D[picked];
+      this.raycaster.setFromCamera(this.pointerNdc, this.sceneController.camera);
+      this.dragPlane.constant = -(Number(current?.z) || 0);
       this.raycaster.ray.intersectPlane(this.dragPlane, this.dragHit);
       this.state.dragState = {
         nodeIndex: picked,
-        offsetX: current.x - this.dragHit.x,
-        offsetY: current.y - this.dragHit.y,
+        offsetX: (current?.x || 0) - this.dragHit.x,
+        offsetY: (current?.y || 0) - this.dragHit.y,
         moved: false
       };
       this.sceneController.controls.enabled = false;
@@ -1621,224 +1920,94 @@ export class App {
   }
 
   handlePointerMove(event) {
+    if (!this.state.graph || !this.nodeRenderer.mesh) return;
+
     if (this.state.dragState && !this.state.dragState.pointerOnly) {
-      this.normalizedPointerFromEvent(event);
-      this.raycaster.setFromCamera(this.pointer, this.sceneController.camera);
+      this.pointerFromEvent(event);
+      this.raycaster.setFromCamera(this.pointerNdc, this.sceneController.camera);
       if (this.raycaster.ray.intersectPlane(this.dragPlane, this.dragHit)) {
         const index = this.state.dragState.nodeIndex;
-        const newPos = {
-          x: this.dragHit.x + this.state.dragState.offsetX,
-          y: this.dragHit.y + this.state.dragState.offsetY,
-          z: 0
-        };
-        this.state.positions2D[index] = newPos;
-        const scaleX = Number(getEl('scaleX').value) || 1;
-        const scaleY = Number(getEl('scaleY').value) || 1;
-        this.state.base2DPositions[index] = { x: newPos.x / scaleX, y: newPos.y / scaleY };
-        this.state.pinnedBasePositions[index] = { ...this.state.base2DPositions[index] };
-        this.state.pinnedNodes.add(index);
+        const nextX = this.dragHit.x + this.state.dragState.offsetX;
+        const nextY = this.dragHit.y + this.state.dragState.offsetY;
+        this.state.positions2D[index] = { ...(this.state.positions2D[index] || {}), x: nextX, y: nextY, z: 0 };
         if (this.state.positions3D[index]) {
-          this.state.positions3D[index].x = newPos.x;
-          this.state.positions3D[index].y = newPos.y;
+          this.state.positions3D[index] = { ...this.state.positions3D[index], x: nextX, y: nextY };
         }
         this.state.dragState.moved = true;
-        this.renderCurrentView(true);
-        this.setStatus(`Dragging node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}.`);
+
+        const quality = getQualityPreset(this.state.quality || this.dom.qualityMode.value);
+        const raw = buildRawPolylines(this.state.graph, this.state.positions3D, this.state.visibleMask, quality.maxEdges);
+        this.state.rawPolylines = raw.map((entry) => entry.points);
+        this.state.rawEdgeLookup = raw.map((entry) => entry.edgeIndex);
+        this.dom.displayLayer.value = 'raw';
+        this.state.displayLayer = 'raw';
+        this.renderNodes();
+        this.refreshVisibleLayer();
+        this.updateOverview();
+        this.updateStatus(`Dragging node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}. Bundles are temporarily hidden until you release the node.`);
       }
       return;
     }
 
     if (this.state.dragState?.pointerOnly) {
-      const moved = Math.hypot((event.clientX - this.state.dragState.x), (event.clientY - this.state.dragState.y));
+      const moved = Math.hypot(event.clientX - this.state.dragState.x, event.clientY - this.state.dragState.y);
       if (moved > 4) this.state.dragState.moved = true;
     }
 
-    const idx = this.pickNodeIndexFromEvent(event);
-    this.state.hoverPosition = { x: event.clientX, y: event.clientY };
-    this.setHoveredNode(idx >= 0 ? idx : null);
-  }
-
-  handlePointerUp(event) {
-    if (this.state.dragState && !this.state.dragState.pointerOnly) {
-      const idx = this.state.dragState.nodeIndex;
-      this.sceneController.controls.enabled = true;
-      this.state.dragState = null;
-      this.suppressClick = true;
-      this.renderCurrentView(false);
-      this.setStatus(`Moved node ${this.state.graph.nodes[idx].label || this.state.graph.nodes[idx].id}. Use Ctrl/⌘ + click to inspect it.`);
+    const picked = this.pickNodeIndex(event);
+    if (picked == null) {
+      this.clearHover();
       return;
     }
-    if (this.state.dragState?.pointerOnly && this.state.dragState.moved) this.suppressClick = true;
+    this.state.hoveredNodeIndex = picked;
+    const node = this.state.graph.nodes[picked];
+    this.dom.tooltip.innerHTML = `<strong>${htmlEscape(node.label || node.id)}</strong>`;
+    this.dom.tooltip.style.left = `${event.clientX + 14}px`;
+    this.dom.tooltip.style.top = `${event.clientY + 14}px`;
+    this.dom.tooltip.classList.remove('hidden');
+    if (this.state.selectedNodeIndex == null) this.updateSelectionPanel();
+  }
+
+  handlePointerUp() {
+    if (this.state.dragState && !this.state.dragState.pointerOnly) {
+      const index = this.state.dragState.nodeIndex;
+      this.sceneController.controls.enabled = true;
+      this.state.dragState = null;
+      this.state.suppressClick = true;
+      this.state.layoutVersion += 1;
+      this.applyDepthMapping();
+      this.invalidateDerivedStates({ clearCache: true, clearFabrication: true, switchToRaw: true });
+      this.refreshEncodingsAndLayers();
+      this.updateStatus(`Moved node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}. Derived bundle, skeleton, and fabrication layers were reset to match the latest edited layout.`);
+      return;
+    }
+    if (this.state.dragState?.pointerOnly && this.state.dragState.moved) this.state.suppressClick = true;
     this.sceneController.controls.enabled = true;
     this.state.dragState = null;
   }
 
-  setHoveredNode(index) {
-    const next = index == null ? null : Number(index);
-    if (this.state.hoveredNodeIndex === next) {
-      if (next != null && next >= 0) this.showTooltip(next, this.state.hoverPosition.x, this.state.hoverPosition.y);
-      return;
-    }
-    this.state.hoveredNodeIndex = next;
-    if (next == null || next < 0) {
-      this.hideTooltip();
-      this.renderCurrentView(false);
-      return;
-    }
-    this.showTooltip(next, this.state.hoverPosition.x, this.state.hoverPosition.y);
-    this.renderCurrentView(false);
+  handlePointerLeave() {
+    this.sceneController.controls.enabled = true;
+    if (!this.state.dragState || this.state.dragState.pointerOnly) this.clearHover();
   }
 
-  showTooltip(index, clientX, clientY) {
-    const graph = this.state.graph;
-    if (!graph || index == null || index < 0) return;
-    const node = graph.nodes[index];
-    this.dom.tooltip.innerHTML = `<strong>${escapeHtml(node.label || node.id)}</strong><div>Degree: ${graph.metrics.degree[index]}</div>`;
-    this.dom.tooltip.classList.remove('hidden');
-    const rect = this.dom.canvas.getBoundingClientRect();
-    this.dom.tooltip.style.left = `${Math.max(8, clientX - rect.left + 14)}px`;
-    this.dom.tooltip.style.top = `${Math.max(8, clientY - rect.top + 14)}px`;
-  }
-
-  hideTooltip() {
+  clearHover() {
+    this.state.hoveredNodeIndex = null;
     this.dom.tooltip.classList.add('hidden');
+    if (this.state.selectedNodeIndex == null) this.updateSelectionPanel();
   }
 
-  handleSceneClick(event) {
-    if (!this.state.graph || !this.isSelectionModifier(event)) return;
-    const picked = this.pickNodeIndexFromEvent(event);
-    if (picked >= 0) this.showSelectedNode(picked);
-    else this.hideSelectedNode();
-  }
-
-  pinSelectedNode() {
-    const index = this.state.selectedNodeIndex;
-    if (index == null || index < 0 || !this.state.positions2D[index]) return;
-    const scaleX = Number(getEl('scaleX').value) || 1;
-    const scaleY = Number(getEl('scaleY').value) || 1;
-    this.state.pinnedNodes.add(index);
-    this.state.pinnedBasePositions[index] = { x: this.state.positions2D[index].x / scaleX, y: this.state.positions2D[index].y / scaleY };
-    this.setStatus(`Pinned node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}.`);
-    this.updateLegend();
-  }
-
-  unpinSelectedNode() {
-    const index = this.state.selectedNodeIndex;
-    if (index == null || index < 0) return;
-    this.state.pinnedNodes.delete(index);
-    this.state.pinnedBasePositions[index] = null;
-    this.setStatus(`Unpinned node ${this.state.graph.nodes[index].label || this.state.graph.nodes[index].id}.`);
-    this.updateLegend();
-  }
-
-  clearPins() {
-    this.state.pinnedNodes.clear();
-    this.state.pinnedBasePositions = new Array(this.state.graph?.nodes.length || 0).fill(null);
-    this.updateLegend();
-    this.setStatus('Cleared pinned nodes.');
-  }
-
-  showSelectedNode(index) {
-    this.state.selectedNodeIndex = index;
-    const graph = this.state.graph;
-    const node = graph.nodes[index];
-    const position = this.currentPositions()[index];
-    const attrs = Object.entries(node.attrs || {});
-    const fields = [
-      ['ID', node.id],
-      ['Label', node.label],
-      ['Degree', graph.metrics.degree[index]],
-      ['Weighted degree', Number(graph.metrics.weightedDegree[index]).toFixed(3)],
-      ['Position', `x=${Number(position.x).toFixed(2)}, y=${Number(position.y).toFixed(2)}, z=${Number(position.z || 0).toFixed(2)}`],
-      ['Original color', this.getOriginalNodeColor(node) || '—'],
-      ['Rendered color', `#${(this.state.nodeColors[index]?.getHexString?.() || '—')}`],
-      ['Color swatch', `<span class="color-chip" style="background:#${(this.state.nodeColors[index]?.getHexString?.() || '69a6ff')}"></span>`]
-    ];
-    const attrsHtml = attrs.length
-      ? attrs.map(([key, value]) => `<div class="key">${escapeHtml(key)}</div><div class="value">${escapeHtml(value)}</div>`).join('')
-      : '<div class="value">No custom attributes.</div>';
-
-    this.dom.nodeInfoContent.innerHTML = `
-      <div class="node-info-card">
-        <div class="node-info-grid">
-          ${fields.map(([key, value]) => `<div class="key">${escapeHtml(key)}</div><div class="value">${key === 'Color swatch' ? value : escapeHtml(value)}</div>`).join('')}
-        </div>
-      </div>
-      <div class="node-info-card">
-        <strong>Attributes</strong>
-        <div class="node-info-grid" style="margin-top:8px;">
-          ${attrsHtml}
-        </div>
-      </div>
-    `;
-    this.dom.nodeInfoPanel.classList.remove('hidden');
-    this.renderCurrentView(false);
-    this.setStatus(`Selected node: ${node.label || node.id}`);
-  }
-
-  hideSelectedNode() {
-    this.state.selectedNodeIndex = null;
-    this.dom.nodeInfoPanel.classList.add('hidden');
-    this.dom.nodeInfoContent.innerHTML = '';
-    this.renderCurrentView(false);
-  }
-
-  exportScene() {
-    const format = getEl('exportFormat')?.value || 'png';
-    if (format === 'svg') return this.exportSvg();
-    if (format === 'pdf') return this.exportPdf();
-    return this.exportPng();
-  }
-
-  exportPng() {
-    const { scale, transparent } = this.getExportOptions();
-    const dataUrl = this.sceneController.exportPng({ scale, transparent });
-    downloadDataUrl(dataUrl, 'network3d-studio.png');
-  }
-
-  exportSvg() {
-    const positions = this.currentPositions();
-    if (!positions.length) return;
-    const { scale, transparent } = this.getExportOptions();
-    const size = this.sceneController.getViewportSize();
-    const svg = buildSceneSvg({
-      camera: this.sceneController.camera,
-      width: Math.round(size.width * scale),
-      height: Math.round(size.height * scale),
-      background: getEl('backgroundColor').value,
-      transparent,
-      positions: positions.filter((_, i) => this.state.visibleMask[i]),
-      sizes: this.state.nodeSizes.filter((_, i) => this.state.visibleMask[i]),
-      nodeColors: this.state.nodeColors.filter((_, i) => this.state.visibleMask[i]),
-      polylines: this.edgeRenderer.lastDraw.polylines,
-      edgeColors: this.edgeRenderer.lastDraw.colors,
-      edgeOpacity: this.edgeRenderer.lastDraw.opacity,
-      labels: getEl('showLabels').checked ? this.labelRenderer.exportLabels(this.state.graph.nodes, positions) : []
-    });
-    downloadBlob(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), 'network3d-studio.svg');
-  }
-
-  async exportPdf() {
-    const { scale, transparent } = this.getExportOptions();
-    const size = this.sceneController.getViewportSize();
-    const dataUrl = this.sceneController.exportPng({ scale, transparent });
-    const { jsPDF } = await import('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm');
-    const pdf = new jsPDF({
-      orientation: size.width >= size.height ? 'landscape' : 'portrait',
-      unit: 'px',
-      format: [size.width * scale, size.height * scale]
-    });
-    pdf.addImage(dataUrl, 'PNG', 0, 0, size.width * scale, size.height * scale, undefined, 'FAST');
-    pdf.save('network3d-studio.pdf');
-  }
-
-  resetScene() {
-    this.edgeRenderer.clear();
-    this.nodeRenderer.dispose();
-    this.labelRenderer.clear();
-    this.hideSelectedNode();
-    this.setHoveredNode(null);
-    this.sceneController.fitToPositions([{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 80 }]);
-    this.setStatus('Scene reset. Graph data is still loaded.');
+  commitSelectionFromHover() {
+    if (!this.state.graph) return;
+    if (this.state.hoveredNodeIndex == null) {
+      this.state.selectedNodeIndex = null;
+    } else if (this.state.selectedNodeIndex === this.state.hoveredNodeIndex) {
+      this.state.selectedNodeIndex = null;
+    } else {
+      this.state.selectedNodeIndex = this.state.hoveredNodeIndex;
+    }
+    this.renderNodes();
+    this.refreshVisibleLayer();
+    this.updateSelectionPanel();
   }
 }
