@@ -579,6 +579,81 @@ code { font-family: "IBM Plex Mono", monospace; }
   }
 }
 
+@media (max-width: 760px) {
+  .workspace.mobile-compact .wizard-rail {
+    position: absolute;
+    top: 12px;
+    bottom: 12px;
+    width: min(320px, 86vw);
+    max-width: calc(100% - 24px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    z-index: 22;
+    backdrop-filter: blur(18px);
+    background: linear-gradient(180deg, rgba(23, 26, 32, 0.96), rgba(31, 35, 42, 0.94));
+  }
+  .workspace.mobile-compact .left-rail { left: 12px; }
+  .workspace.mobile-compact .right-rail { right: 12px; }
+  .workspace.mobile-compact .wizard-rail.collapsed {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    height: auto;
+    bottom: auto;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    overflow: visible;
+  }
+  .workspace.mobile-compact .left-rail.collapsed { left: 12px; top: 12px; }
+  .workspace.mobile-compact .right-rail.collapsed { right: 12px; top: 12px; }
+  .workspace.mobile-compact .wizard-rail.collapsed .rail-header {
+    padding: 0;
+    border: none;
+    background: transparent;
+  }
+  .workspace.mobile-compact .wizard-rail.collapsed .ghost.small {
+    writing-mode: horizontal-tb;
+    transform: none;
+    min-height: 42px;
+    min-width: 58px;
+    height: 42px;
+    padding: 0 12px;
+    border-radius: 14px;
+    background: rgba(7, 15, 28, 0.9);
+    border: 1px solid rgba(255,255,255,0.12);
+    box-shadow: 0 14px 28px rgba(0,0,0,0.26);
+    backdrop-filter: blur(16px);
+  }
+  .workspace.mobile-compact .wizard-rail.collapsed .wizard-panel,
+  .workspace.mobile-compact .wizard-rail.collapsed .rail-title,
+  .workspace.mobile-compact .wizard-rail.collapsed .rail-subtitle { display: none; }
+  .workspace.mobile-compact .wizard-hero {
+    width: min(250px, calc(100% - 120px));
+    left: 12px;
+    top: 64px;
+  }
+  .workspace.mobile-compact .scene-tools {
+    top: 64px;
+    right: 12px;
+    width: 214px;
+    max-height: calc(100% - 64px - 170px);
+  }
+  .workspace.mobile-compact .scene-tools.collapsed { width: 164px; }
+  .workspace.mobile-compact #selectionCard {
+    right: 12px;
+    bottom: 120px;
+    width: 176px;
+    max-width: calc(100% - 24px);
+  }
+  .workspace.mobile-compact .stage-nav {
+    width: 42px;
+    height: 72px;
+  }
+}
+
 /* Revision: floating scene tools, HUD toggles, side navigation, and stronger compare board */
 #viewportStage { position: relative; overflow: hidden; }
 
@@ -1199,4 +1274,13 @@ body[data-ui-theme="light-gray"] #viewportStage {
 }
 #studioShell:fullscreen .wizard-flow-caption {
   text-align: center;
+}
+#studioShell:fullscreen .wizard-hero {
+  left: calc(min(340px, calc(100vw - 120px)) + 28px);
+  top: 14px;
+  width: min(360px, calc(100vw - min(340px, calc(100vw - 120px)) - 90px));
+}
+#studioShell:fullscreen.fs-left-collapsed .wizard-hero {
+  left: 86px;
+  width: min(360px, calc(100vw - 140px));
 }

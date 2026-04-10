@@ -408,7 +408,9 @@ export class App {
       currentMode: 'load2d',
       dragState: null,
       suppressClick: false,
-      uiTheme: 'dark-gray'
+      uiTheme: 'dark-gray',
+      mobileCompact: false,
+      _lastMobileCompact: null
     };
 
     this.stepOrder = ['load2d', 'map3d', 'bundle', 'compare', 'fabricate', 'style', 'export'];
@@ -476,6 +478,38 @@ export class App {
   syncLayoutMetrics() {
     const navHeight = Math.max(72, Math.ceil(this.dom.topNavigator?.getBoundingClientRect().height || 88));
     document.documentElement.style.setProperty('--topbar-h', `${navHeight}px`);
+    const mobileCompact = window.innerWidth <= 760;
+    this.state.mobileCompact = mobileCompact;
+    this.dom.workspace?.classList.toggle('mobile-compact', mobileCompact);
+    if (this.state._lastMobileCompact !== mobileCompact) {
+      this.state._lastMobileCompact = mobileCompact;
+      if (mobileCompact) {
+        this.setLeftRailCollapsed(true, { skipResize: true });
+        this.setRightRailCollapsed(true, { skipResize: true });
+      }
+    }
+    this.dom.root?.classList.toggle('fs-left-collapsed', !!this.dom.leftRail?.classList.contains('collapsed'));
+  }
+
+  setLeftRailCollapsed(collapsed, { skipResize = false } = {}) {
+    this.dom.leftRail?.classList.toggle('collapsed', collapsed);
+    this.dom.workspace?.classList.toggle('left-collapsed', collapsed);
+    if (this.dom.toggleLeftRailBtn) this.dom.toggleLeftRailBtn.textContent = collapsed ? 'Tools' : 'Collapse';
+    this.dom.root?.classList.toggle('fs-left-collapsed', collapsed);
+    if (!skipResize) {
+      this.syncLayoutMetrics();
+      this.sceneController.resize();
+    }
+  }
+
+  setRightRailCollapsed(collapsed, { skipResize = false } = {}) {
+    this.dom.rightRail?.classList.toggle('collapsed', collapsed);
+    this.dom.workspace?.classList.toggle('right-collapsed', collapsed);
+    if (this.dom.toggleRightRailBtn) this.dom.toggleRightRailBtn.textContent = collapsed ? 'Guide' : 'Collapse';
+    if (!skipResize) {
+      this.syncLayoutMetrics();
+      this.sceneController.resize();
+    }
   }
 
   applyUiTheme() {
@@ -508,21 +542,13 @@ export class App {
 
   bindEvents() {
     this.dom.toggleLeftRailBtn?.addEventListener('click', () => {
-      this.dom.leftRail?.classList.toggle('collapsed');
-      this.dom.workspace?.classList.toggle('left-collapsed');
-      const collapsed = this.dom.leftRail?.classList.contains('collapsed');
-      if (this.dom.toggleLeftRailBtn) this.dom.toggleLeftRailBtn.textContent = collapsed ? 'Tools' : 'Collapse';
-      this.syncLayoutMetrics();
-      this.sceneController.resize();
+      const collapsed = !this.dom.leftRail?.classList.contains('collapsed');
+      this.setLeftRailCollapsed(collapsed);
     });
 
     this.dom.toggleRightRailBtn?.addEventListener('click', () => {
-      this.dom.rightRail?.classList.toggle('collapsed');
-      this.dom.workspace?.classList.toggle('right-collapsed');
-      const collapsed = this.dom.rightRail?.classList.contains('collapsed');
-      if (this.dom.toggleRightRailBtn) this.dom.toggleRightRailBtn.textContent = collapsed ? 'Guide' : 'Collapse';
-      this.syncLayoutMetrics();
-      this.sceneController.resize();
+      const collapsed = !this.dom.rightRail?.classList.contains('collapsed');
+      this.setRightRailCollapsed(collapsed);
     });
 
     this.dom.modeTabs.forEach((tab) => {
