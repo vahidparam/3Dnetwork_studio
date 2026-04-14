@@ -25,6 +25,57 @@ import {
 } from './studio/analysis.js';
 import { buildFabricationGroup, buildPolylineMeshGroup, evaluatePrintability, exportGroup } from './studio/fabrication.js';
 
+const TOUR_STEPS = [
+  {
+    mode: null,
+    target: null,
+    title: 'Welcome to Network Studio',
+    body: 'A 7-step guided workflow for loading, bundling, comparing, fabricating, styling, and exporting 3D network sculptures. This tour walks you through each stage.'
+  },
+  {
+    mode: 'load2d',
+    target: '[data-mode="load2d"]',
+    title: 'Step 1 · Load & 2D layout',
+    body: 'Load a GEXF or CSV graph — or start with a demo network. Run a 2D layout (ForceAtlas2 recommended), drag nodes to open up congested areas, then confirm before going into 3D.'
+  },
+  {
+    mode: 'map3d',
+    target: '[data-mode="map3d"]',
+    title: 'Step 2 · 3D mapping',
+    body: 'Map your approved 2D layout into three dimensions using degree, weighted degree, an attribute, or the globe mode. Keep depth subtle before bundling to preserve readability.'
+  },
+  {
+    mode: 'bundle',
+    target: '[data-mode="bundle"]',
+    title: 'Step 3 · Bundle algorithms',
+    body: 'Each algorithm card shows its family, strengths, and source paper. Pick one, tune parameters in draft quality, then switch to export quality for the final render.'
+  },
+  {
+    mode: 'compare',
+    target: '[data-mode="compare"]',
+    title: 'Step 4 · Compare & skeleton',
+    body: 'Generate side-by-side previews with compactness, inflation, and turn metrics. Then extract a centerline skeleton from the winning bundle for fabrication or structural export.'
+  },
+  {
+    mode: 'fabricate',
+    target: '[data-mode="fabricate"]',
+    title: 'Step 5 · Fabricate',
+    body: 'Build a printable physical model — set rod radius, target width in mm, node shapes, and base plate options. Export STL, OBJ, or GLB directly to your slicer.'
+  },
+  {
+    mode: 'style',
+    target: '[data-mode="style"]',
+    title: 'Step 6 · Style studio',
+    body: 'Apply a material language preset — scientific dark, metallic sculpture, glass fiber, or neon flow. Adjust opacity, glow, tube radius, and focus dimming to finalize the look.'
+  },
+  {
+    mode: 'export',
+    target: '[data-mode="export"]',
+    title: 'Step 7 · Export',
+    body: 'Save named camera presets for reproducibility, then export PNG, SVG, or the full bundle state JSON. This is the final step — you\'re done.'
+  }
+];
+
 function getEl(id) {
   return document.getElementById(id);
 }
@@ -410,7 +461,8 @@ export class App {
       suppressClick: false,
       uiTheme: 'dark-gray',
       mobileCompact: false,
-      _lastMobileCompact: null
+      _lastMobileCompact: null,
+      tourIndex: 0
     };
 
     this.stepOrder = ['load2d', 'map3d', 'bundle', 'compare', 'fabricate', 'style', 'export'];
@@ -469,10 +521,18 @@ export class App {
     this.updateFullscreenUi();
     this.syncLayoutMetrics();
     this.setMode('load2d');
+    this.setRightRailCollapsed(true, { skipResize: true });
     this.applyStylePresetUi();
+    // Override initial background to dark gray
+    const _initBg = '#252525';
+    if (this.dom.backgroundColor) this.dom.backgroundColor.value = _initBg;
+    if (this.dom.quickBackgroundColor) this.dom.quickBackgroundColor.value = _initBg;
+    this.sceneController.setBackground(_initBg);
+    document.documentElement.style.setProperty('--studio-bg', _initBg);
     this.updateStatus('Ready. Load a graph or choose one of the classic demo networks in Step 1.');
     this.refreshPresetSelect();
     this.renderEmptyState();
+    this.initTour();
   }
 
   syncLayoutMetrics() {
@@ -735,12 +795,7 @@ export class App {
       card.className = `method-card ${method.id === this.state.activeMethod ? 'active' : ''}`;
       card.dataset.methodId = method.id;
       card.innerHTML = `
-        <div class="method-card-top">
-          <span class="method-family">${htmlEscape(method.family)}</span>
-          <span class="method-status">${htmlEscape(method.status)}</span>
-        </div>
         <div class="method-name">${htmlEscape(method.name)}</div>
-        <div class="method-badge">${htmlEscape(method.sourceBadge)}</div>
       `;
       card.addEventListener('click', () => {
         this.state.activeMethod = method.id;
@@ -961,7 +1016,8 @@ export class App {
 
   renderEmptyState() {
     this.dom.overviewStats.innerHTML = 'Load a graph to inspect bundle methods, skeletons, and fabrication geometry.';
-    this.dom.selectionContent.innerHTML = 'Hover or click a node to inspect metadata.';
+    this.dom.selectionCard?.classList.add('hidden');
+    this.dom.selectionContent.innerHTML = '';
     this.dom.bundleMetrics.innerHTML = 'No bundle has been computed yet.';
     this.dom.layerContent.innerHTML = 'Display layer: raw graph.';
     this.dom.skeletonStats.innerHTML = 'No skeleton extracted yet.';
@@ -1511,15 +1567,17 @@ export class App {
 
   updateSelectionPanel() {
     const graph = this.state.graph;
-    if (!graph) return;
+    const card = this.dom.selectionCard;
+    if (!graph) { card?.classList.add('hidden'); return; }
     if (this.state.selectedNodeIndex == null) {
       const hovered = this.state.hoveredNodeIndex;
       if (hovered == null) {
-        this.dom.selectionContent.innerHTML = 'Hover or click a node to inspect metadata.';
-      } else {
-        const node = graph.nodes[hovered];
-        this.dom.selectionContent.innerHTML = summarizeNode(node);
+        card?.classList.add('hidden');
+        return;
       }
+      const node = graph.nodes[hovered];
+      this.dom.selectionContent.innerHTML = summarizeNode(node);
+      card?.classList.remove('hidden');
       return;
     }
     const node = graph.nodes[this.state.selectedNodeIndex];
@@ -1531,6 +1589,7 @@ export class App {
       <div class="top-gap small"><strong>Degree</strong>: ${formatNumber(degree, 0)} · <strong>Weighted</strong>: ${formatNumber(weighted)}</div>
       <div class="top-gap small"><strong>Neighbors</strong>: ${neighbors.length ? htmlEscape(neighbors.join(', ')) : 'None'}</div>
     `;
+    card?.classList.remove('hidden');
   }
 
   updateMetricsPanel(layer = this.getCurrentLayerPayload()) {
@@ -1833,6 +1892,106 @@ export class App {
     if (this.dom.backgroundColor) this.dom.backgroundColor.value = style.background;
     document.documentElement.style.setProperty('--studio-bg', this.dom.backgroundColor?.value || style.background);
     this.syncQuickSceneTools();
+  }
+
+  // ─── Guided tour ─────────────────────────────────────────────────────────
+
+  initTour() {
+    const card = document.createElement('div');
+    card.id = 'tourCard';
+    card.className = 'tour-card hidden';
+    card.innerHTML = `
+      <div class="tour-progress"><div class="tour-progress-bar" id="tourProgressBar"></div></div>
+      <div class="tour-inner">
+        <div class="tour-count" id="tourCount"></div>
+        <div class="tour-title" id="tourTitleEl"></div>
+        <div class="tour-body" id="tourBodyEl"></div>
+        <div class="tour-nav">
+          <button id="tourPrevBtn" class="ghost small">← Back</button>
+          <span style="flex:1"></span>
+          <button id="tourSkipBtn" class="ghost small">Skip</button>
+          <button id="tourNextBtn" class="primary small">Next →</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(card);
+
+    document.getElementById('tourPrevBtn').addEventListener('click', () => this.moveTour(-1));
+    document.getElementById('tourNextBtn').addEventListener('click', () => this.moveTour(+1));
+    document.getElementById('tourSkipBtn').addEventListener('click', () => this.endTour());
+    document.getElementById('tourBtn')?.addEventListener('click', () => this.startTour());
+    document.getElementById('tourHelpBtn')?.addEventListener('click', () => this.startTour());
+
+    if (!localStorage.getItem('ns-tour-seen')) {
+      setTimeout(() => this.startTour(), 700);
+    }
+  }
+
+  startTour() {
+    this.state.tourIndex = 0;
+    this.showTourStep();
+  }
+
+  showTourStep() {
+    const steps = TOUR_STEPS;
+    const i = this.state.tourIndex;
+    const step = steps[i];
+
+    const card = document.getElementById('tourCard');
+    document.getElementById('tourCount').textContent = `${i + 1} of ${steps.length}`;
+    document.getElementById('tourTitleEl').textContent = step.title;
+    document.getElementById('tourBodyEl').textContent = step.body;
+    document.getElementById('tourProgressBar').style.width = `${((i + 1) / steps.length) * 100}%`;
+    document.getElementById('tourPrevBtn').style.visibility = i === 0 ? 'hidden' : '';
+    document.getElementById('tourNextBtn').textContent = i === steps.length - 1 ? 'Finish ✓' : 'Next →';
+    document.getElementById('tourSkipBtn').style.display = i === steps.length - 1 ? 'none' : '';
+
+    document.querySelectorAll('.tour-target-highlight').forEach(el => el.classList.remove('tour-target-highlight'));
+    const targetEl = step.target ? document.querySelector(step.target) : null;
+    if (targetEl) targetEl.classList.add('tour-target-highlight');
+    if (step.mode) this.setMode(step.mode);
+
+    card.classList.remove('hidden');
+    requestAnimationFrame(() => this.positionTourCard(card, targetEl));
+  }
+
+  positionTourCard(card, target) {
+    const cardW = 340;
+    if (!target) {
+      card.style.left = `${Math.max(10, (window.innerWidth - cardW) / 2)}px`;
+      card.style.top = '110px';
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - cardW / 2;
+    left = Math.max(10, Math.min(left, window.innerWidth - cardW - 10));
+    card.style.left = `${left}px`;
+    card.style.top = `${rect.bottom + 16}px`;
+  }
+
+  moveTour(dir) {
+    const newIndex = this.state.tourIndex + dir;
+    if (newIndex >= TOUR_STEPS.length) { this.endTour(); return; }
+    this.state.tourIndex = Math.max(0, newIndex);
+    this.showTourStep();
+  }
+
+  endTour() {
+    document.getElementById('tourCard')?.classList.add('hidden');
+    document.querySelectorAll('.tour-target-highlight').forEach(el => el.classList.remove('tour-target-highlight'));
+    localStorage.setItem('ns-tour-seen', '1');
+    this.setMode('load2d');
+    // Briefly pulse the restart anchors so users know where to find the tour
+    const pulse = (id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.remove('tour-hint-pulse');
+      void el.offsetWidth; // reflow to restart animation
+      el.classList.add('tour-hint-pulse');
+      el.addEventListener('animationend', () => el.classList.remove('tour-hint-pulse'), { once: true });
+    };
+    pulse('tourBtn');
+    pulse('tourHelpBtn');
   }
 
   setCameraPreset(kind) {

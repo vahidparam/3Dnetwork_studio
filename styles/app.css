@@ -1,9 +1,9 @@
 :root {
-  --bg: #171a20;
-  --panel: rgba(31, 35, 42, 0.9);
+  --bg: #343841;
+  --panel: rgba(65, 71, 82, 0.9);
   --panel-soft: rgba(255, 255, 255, 0.03);
-  --line: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(180, 190, 205, 0.22);
+  --line: rgba(255, 255, 255, 0.815);
+  --line-strong: rgba(252, 252, 252, 0.22);
   --text: #edf1f7;
   --muted: #a7b0bd;
   --accent: #c2cad6;
@@ -210,7 +210,7 @@ code { font-family: "IBM Plex Mono", monospace; }
   padding: 14px 14px 8px;
 }
 .rail-title { font-weight: 700; }
-.rail-subtitle { font-size: 12px; color: var(--muted); }
+.rail-subtitle { font-size: 12px; color: var(--); }
 .wizard-rail.collapsed {
   width: 60px;
   min-width: 60px;
@@ -1113,7 +1113,681 @@ code { font-family: "IBM Plex Mono", monospace; }
 }
 
 
-/* Step 1 demo graph chooser */
+/* ─── Brand row (title + tour trigger) ──────────────────────────────────── */
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tour-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: 160ms ease;
+  white-space: nowrap;
+}
+.tour-trigger:hover {
+  background: rgba(99, 167, 255, 0.14);
+  border-color: rgba(99, 167, 255, 0.35);
+  color: #a8ccff;
+  transform: none;
+}
+
+/* ─── Guided tour card ───────────────────────────────────────────────────── */
+.tour-card {
+  position: fixed;
+  z-index: 2000;
+  width: 340px;
+  max-width: calc(100vw - 20px);
+  background: rgba(6, 13, 26, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255,255,255,0.04);
+  backdrop-filter: blur(24px);
+  overflow: hidden;
+  transition: top 200ms ease, left 200ms ease;
+}
+.tour-progress {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.tour-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4b9eff, #67e8f9);
+  transition: width 220ms ease;
+  border-radius: 0 2px 2px 0;
+}
+.tour-inner {
+  padding: 16px 18px 14px;
+}
+.tour-count {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: #5b8fcc;
+  margin-bottom: 7px;
+}
+.tour-title {
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1.15;
+  margin-bottom: 10px;
+  color: #edf4ff;
+}
+.tour-body {
+  font-size: 13px;
+  color: #b8ccec;
+  line-height: 1.65;
+  margin-bottom: 16px;
+}
+.tour-nav {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Tour target highlight — pulsing ring */
+@keyframes tourPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(99,167,255,0.55), inset 0 0 0 2px rgba(99,167,255,0.4); }
+  60%  { box-shadow: 0 0 0 8px rgba(99,167,255,0),    inset 0 0 0 2px rgba(99,167,255,0.6); }
+  100% { box-shadow: 0 0 0 0   rgba(99,167,255,0),    inset 0 0 0 2px rgba(99,167,255,0.4); }
+}
+.tour-target-highlight {
+  animation: tourPulse 1.5s ease-out infinite;
+  outline: 2px solid rgba(99, 167, 255, 0.7);
+  outline-offset: 3px;
+  border-radius: 14px;
+  position: relative;
+  z-index: 50;
+}
+
+/* ─── Per-step color system ──────────────────────────────────────────────── */
+
+/* Active tab: each step gets its own accent */
+button[data-mode="load2d"].active    { border-color: rgba(75,158,255,.55);  background: linear-gradient(135deg,rgba(75,158,255,.2),rgba(75,158,255,.07)); }
+button[data-mode="map3d"].active     { border-color: rgba(167,139,250,.55); background: linear-gradient(135deg,rgba(167,139,250,.2),rgba(167,139,250,.07)); }
+button[data-mode="bundle"].active    { border-color: rgba(251,146,60,.55);  background: linear-gradient(135deg,rgba(251,146,60,.2),rgba(251,146,60,.07)); }
+button[data-mode="compare"].active   { border-color: rgba(52,211,153,.55);  background: linear-gradient(135deg,rgba(52,211,153,.2),rgba(52,211,153,.07)); }
+button[data-mode="fabricate"].active { border-color: rgba(248,113,113,.55); background: linear-gradient(135deg,rgba(248,113,113,.2),rgba(248,113,113,.07)); }
+button[data-mode="style"].active     { border-color: rgba(244,114,182,.55); background: linear-gradient(135deg,rgba(244,114,182,.2),rgba(244,114,182,.07)); }
+button[data-mode="export"].active    { border-color: rgba(34,211,238,.55);  background: linear-gradient(135deg,rgba(34,211,238,.2),rgba(34,211,238,.07)); }
+
+/* Step number badges: per-step tint */
+button[data-mode="load2d"]    .step-num { background: rgba(75,158,255,.18);  border-color: rgba(75,158,255,.4);  color: #7db8ff; }
+button[data-mode="map3d"]     .step-num { background: rgba(167,139,250,.18); border-color: rgba(167,139,250,.4); color: #c4b5fd; }
+button[data-mode="bundle"]    .step-num { background: rgba(251,146,60,.18);  border-color: rgba(251,146,60,.4);  color: #fdba74; }
+button[data-mode="compare"]   .step-num { background: rgba(52,211,153,.18);  border-color: rgba(52,211,153,.4);  color: #6ee7b7; }
+button[data-mode="fabricate"] .step-num { background: rgba(248,113,113,.18); border-color: rgba(248,113,113,.4); color: #fca5a5; }
+button[data-mode="style"]     .step-num { background: rgba(244,114,182,.18); border-color: rgba(244,114,182,.4); color: #f9a8d4; }
+button[data-mode="export"]    .step-num { background: rgba(34,211,238,.18);  border-color: rgba(34,211,238,.4);  color: #67e8f9; }
+
+/* Control block left accent border: per step */
+[data-mode-panel="load2d"]    .control-block { border-left: 3px solid rgba(75,158,255,.5); }
+[data-mode-panel="map3d"]     .control-block { border-left: 3px solid rgba(167,139,250,.5); }
+[data-mode-panel="bundle"]    .control-block { border-left: 3px solid rgba(251,146,60,.5); }
+[data-mode-panel="compare"]   .control-block { border-left: 3px solid rgba(52,211,153,.5); }
+[data-mode-panel="fabricate"] .control-block { border-left: 3px solid rgba(248,113,113,.5); }
+[data-mode-panel="style"]     .control-block { border-left: 3px solid rgba(244,114,182,.5); }
+[data-mode-panel="export"]    .control-block { border-left: 3px solid rgba(34,211,238,.5); }
+
+/* Summary expand/collapse arrow: per-step color */
+[data-mode-panel="load2d"]    .control-block summary::after { color: #7db8ff; }
+[data-mode-panel="map3d"]     .control-block summary::after { color: #c4b5fd; }
+[data-mode-panel="bundle"]    .control-block summary::after { color: #fdba74; }
+[data-mode-panel="compare"]   .control-block summary::after { color: #6ee7b7; }
+[data-mode-panel="fabricate"] .control-block summary::after { color: #fca5a5; }
+[data-mode-panel="style"]     .control-block summary::after { color: #f9a8d4; }
+[data-mode-panel="export"]    .control-block summary::after { color: #67e8f9; }
+
+/* Chip badges: per-step color */
+[data-mode-panel="load2d"]    .chip { background: rgba(75,158,255,.14);  border-color: rgba(75,158,255,.3);  color: #bdd9ff; }
+[data-mode-panel="map3d"]     .chip { background: rgba(167,139,250,.14); border-color: rgba(167,139,250,.3); color: #ddd6fe; }
+[data-mode-panel="bundle"]    .chip { background: rgba(251,146,60,.14);  border-color: rgba(251,146,60,.3);  color: #fed7aa; }
+[data-mode-panel="compare"]   .chip { background: rgba(52,211,153,.14);  border-color: rgba(52,211,153,.3);  color: #a7f3d0; }
+[data-mode-panel="fabricate"] .chip { background: rgba(248,113,113,.14); border-color: rgba(248,113,113,.3); color: #fecaca; }
+[data-mode-panel="style"]     .chip { background: rgba(244,114,182,.14); border-color: rgba(244,114,182,.3); color: #fbcfe8; }
+[data-mode-panel="export"]    .chip { background: rgba(34,211,238,.14);  border-color: rgba(34,211,238,.3);  color: #a5f3fc; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MINIMAL PROFESSIONAL REDESIGN
+   Solid surfaces · No glassmorphism · Clean grid · Purposeful color
+   All backdrop-filter removed. Heavy shadows replaced with crisp borders.
+   Step colors used only where they add navigational meaning.
+════════════════════════════════════════════════════════════════════════════ */
+
+/* 0 — Kill all blur / glassmorphism globally */
+*, *::before, *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* 1 — Design tokens */
+:root {
+  --bg:          #171717;
+  --panel:       #1e1e1e;
+  --panel-soft:  #242424;
+  --line:        #2c2c2c;
+  --line-strong: #3c3c3c;
+  --text:        #f0f0f0;
+  --muted:       #7a7a7a;
+  --accent:      #9a9a9a;
+  --accent-2:    #505050;
+  --shadow:      0 2px 8px rgba(0,0,0,0.5);
+  --radius:      8px;
+  --studio-bg:   #252525;
+}
+body,
+body[data-ui-theme="dark-gray"]  { background: #171717; }
+body[data-ui-theme="midnight-gray"] { background: #111111; }
+body[data-ui-theme="light-gray"] { background: #f5f5f5; }
+body[data-ui-theme="blue-studio"] { background: #0d1420; }
+
+/* 2 — Top navigator: clean solid bar */
+.top-navigator {
+  background: #111111;
+  border-bottom: 1px solid #272727;
+  padding: 0 18px;
+  gap: 24px;
+  min-height: 58px;
+}
+.top-brand { min-width: 170px; padding: 12px 0; }
+.brand-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: #e8e8e8;
+}
+.eyebrow {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  color: #fdfdfd;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+/* 3 — Step tabs: minimal underline-style */
+.step-tabs { gap: 2px; align-items: stretch; }
+.mode-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #484848;
+  padding: 8px 8px;
+  min-height: 40px;
+  gap: 5px;
+  letter-spacing: 0.01em;
+  position: relative;
+}
+.mode-tab::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 8px; right: 8px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  transition: background 160ms ease;
+}
+.mode-tab:hover {
+  background: #1c1c1c;
+  border-color: #272727;
+  color: #7a7a7a;
+  transform: none;
+}
+.mode-tab.active {
+  background: #1c1c1c;
+  border-color: #2e2e2e;
+  color: #e8e8e8;
+}
+.step-num {
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  background: #1e1e1e;
+  border: 1px solid #333333;
+  font-size: 10px;
+  font-weight: 700;
+}
+.mode-tab .step-icon {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* 4 — Rails: flat sidebar */
+.wizard-rail {
+  background: #161616;
+  border-right: 1px solid #242424;
+}
+.right-rail { border-right: none; border-left: 1px solid #242424; }
+.rail-header {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid #222222;
+  background: #141414;
+  flex-shrink: 0;
+}
+.rail-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #444444;
+}
+.rail-subtitle { font-size: 10px; color: #c5c5c5; margin-top: 2px; }
+.wizard-rail.collapsed button { background: #1e1e1e; border-color: #2a2a2a; }
+
+/* Rail footer: persistent help anchor */
+.rail-footer {
+  border-top: 1px solid #222222;
+  padding: 10px 14px;
+  background: #141414;
+  flex-shrink: 0;
+}
+.tour-help-btn {
+  width: 100%;
+  background: transparent !important;
+  border: 1px solid #272727 !important;
+  border-radius: 6px !important;
+  color: #444444 !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  padding: 7px 10px !important;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+.tour-help-btn:hover {
+  background: #1e1e1e !important;
+  border-color: #333333 !important;
+  color: #888888 !important;
+  transform: none !important;
+}
+
+/* 5 — Wizard panels */
+.wizard-panel { padding: 0 10px 16px; }
+.panel-head {
+  margin: 12px 0 8px;
+  padding: 0 2px;
+}
+.panel-head h2 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #c8c8c8;
+  margin: 0;
+}
+.chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #222222;
+  border: 1px solid #2e2e2e;
+  color: #484848;
+}
+
+/* 6 — Control blocks: flat solid cards */
+.control-block,
+.hud,
+.progress-card,
+.reference-card,
+.method-card,
+#statusBar,
+.wizard-hero,
+.compare-card {
+  background: #1e1e1e;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.control-block { margin-bottom: 5px; overflow: hidden; }
+.control-block summary {
+  padding: 9px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #606060;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.control-block summary::before {
+  content: attr(data-icon);
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.control-block summary:hover { background: rgba(255,255,255,0.02); }
+.control-block summary::after { color: #333333; font-size: 10px; }
+.control-block[open] > summary {
+  color: #909090;
+  border-bottom: 1px solid #252525;
+}
+.control-block[open] > summary::after { color: #444444; }
+.block-body { padding: 10px 12px 12px; }
+
+/* 7 — Buttons */
+button {
+  border: 1px solid #2d2d2d;
+  border-radius: 6px;
+  background: #222222;
+  color: #c8c8c8;
+  padding: 8px 11px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: 120ms ease;
+}
+button:hover {
+  border-color: #3a3a3a;
+  background: #292929;
+  transform: none;
+}
+button.primary {
+  background: #1a3f88;
+  border-color: #2050a8;
+  color: #c8dcff;
+  font-weight: 600;
+}
+button.primary:hover {
+  background: #1e4999;
+  border-color: #2860c0;
+  filter: none;
+}
+button.ghost {
+  background: transparent;
+  border-color: #242424;
+  color: #585858;
+}
+button.ghost:hover {
+  background: #1c1c1c;
+  border-color: #333333;
+  color: #888888;
+}
+button.small { padding: 6px 9px; font-size: 11px; border-radius: 5px; }
+
+/* 8 — Inputs & selects */
+select,
+input[type="text"],
+input[type="number"],
+input[type="file"],
+input[type="color"] {
+  background: #161616;
+  border: 1px solid #2d2d2d;
+  border-radius: 5px;
+  color: #d8d8d8;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+select option { background: #1a1a1a; }
+input[type="color"] { padding: 3px; height: 34px; }
+.field { margin-bottom: 8px; gap: 4px; }
+.field > span {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #484848;
+}
+.checkbox { color: #808080; margin-bottom: 8px; font-size: 12px; }
+
+/* 9 — Info / hint blocks */
+.info-block, .hint-block {
+  background: #1a1a1a;
+  border: 1px solid #252525;
+  border-radius: 6px;
+  color: #606060;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.info-block strong, .hint-block strong { color: #a0a0a0; display: block; margin-bottom: 4px; }
+.hint-list li { color: #585858; }
+.info-stack { gap: 6px; }
+
+/* 10 — Scene viewport */
+#viewportStage { background: var(--studio-bg); }
+
+/* 11 — Scene tools panel */
+.scene-tools {
+  background: #181818;
+  border: 1px solid #272727;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}
+.scene-tools-head {
+  border-bottom: 1px solid #222222;
+  padding: 10px 12px 8px;
+}
+.scene-tools-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #484848;
+}
+.scene-tools-subtitle { font-size: 10px; color: #303030; margin-top: 2px; }
+.scene-tools-collapse {
+  width: 28px; height: 28px;
+  border-radius: 5px;
+  font-size: 12px;
+  background: #222222;
+  border-color: #2d2d2d;
+}
+.scene-tools-collapse:hover { background: #2a2a2a; }
+
+/* 12 — HUD / selection card */
+.hud {
+  background: #1a1a1a;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  box-shadow: none;
+}
+#selectionCard {
+  background: #181818;
+  border: 1px solid #272727;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+.hud-title { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #505050; }
+.hud-content { color: #606060; font-size: 11px; }
+
+/* 13 — Stage navigation arrows */
+.stage-nav {
+  background: #181818;
+  border: 1px solid #272727;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  font-size: 20px;
+  color: #484848;
+}
+.stage-nav:hover { background: #202020; color: #888888; }
+
+/* 14 — Floating viewport FAB */
+.viewport-fab-btn {
+  background: #181818;
+  border: 1px solid #272727;
+  border-radius: 7px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  font-size: 15px;
+  color: #505050;
+  width: 38px; height: 38px;
+}
+.viewport-fab-btn:hover { background: #222222; color: #888888; transform: none; }
+.viewport-fab-btn.active { background: #0f2450; border-color: #1a3d80; color: #7aabff; }
+
+/* 15 — Status bar */
+#statusBar {
+  background: #141414;
+  border: 1px solid #222222;
+  border-radius: 6px;
+  color: #404040;
+  font-size: 11px;
+}
+
+/* 16 — Progress overlay */
+.progress-card {
+  background: #1e1e1e;
+  border: 1px solid #2d2d2d;
+  border-radius: 10px;
+  box-shadow: 0 12px 50px rgba(0,0,0,0.6);
+}
+#progressTitle { color: #d0d0d0; font-size: 14px; font-weight: 700; }
+#progressValue { color: #606060; }
+
+/* 17 — Method cards (bundle step) */
+.method-card {
+  background: #1c1c1c;
+  border: 1px solid #272727;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.method-card:hover { border-color: #363636; background: #202020; }
+.method-card.active { background: #0d1d38; border-color: #1a3d80; }
+.method-family, .method-status, .method-badge, .reference-year {
+  background: #232323;
+  border: 1px solid #2d2d2d;
+  color: #585858;
+  font-size: 9px;
+}
+.method-name { color: #c8c8c8; font-size: 12px; }
+.method-detail {
+  background: #1c1c1c;
+  border: 1px solid #272727;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.method-detail p { color: #686868; }
+.method-detail h3 { color: #d0d0d0; font-size: 17px; }
+.ref-pill { background: #181818; border: 1px solid #252525; border-radius: 8px; }
+.ref-pill-title { color: #b0b0b0; }
+.ref-pill-meta { color: #484848; }
+
+/* 18 — Reference cards (export panel right rail) */
+.reference-card { background: #1c1c1c; border: 1px solid #272727; border-radius: 6px; box-shadow: none; }
+.reference-body h3 { color: #c8c8c8; font-size: 13px; }
+.reference-body p { color: #606060; }
+.reference-body a { color: #4b9eff; text-decoration: none; }
+.reference-year { color: #444444; }
+
+/* 19 — Compare cards (right rail) */
+.compare-card { background: #1c1c1c; border: 1px solid #272727; border-radius: 8px; box-shadow: none; }
+.compare-card h3 { color: #d0d0d0; }
+.compare-metrics { color: #545454; }
+
+/* 20 — Wizard hero (viewport overlay) */
+.wizard-hero {
+  background: rgba(20, 20, 20, 0.96);
+  border: 1px solid #272727;
+  border-radius: 10px;
+  box-shadow: none;
+}
+.wizard-hero h1 { color: #e8e8e8; }
+.wizard-hero p { color: #5a5a5a; }
+.wizard-hero .eyebrow { color: #383838; }
+
+/* 21 — Footer flow caption */
+.wizard-flow-caption {
+  background: rgba(18, 18, 18, 0.96);
+  border: 1px solid #242424;
+  color: #343434;
+}
+
+/* 22 — Details drawer */
+.details-drawer {
+  background: #181818;
+  border: 1px solid #272727;
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+}
+.details-drawer-head { border-bottom: 1px solid #222222; }
+.details-drawer-title { color: #c8c8c8; }
+.details-drawer-hint { color: #404040; }
+.details-toggle {
+  background: rgba(18, 18, 18, 0.96);
+  border: 1px solid #242424;
+  color: #484848;
+}
+
+/* 23 — KV inspection grid */
+.kv-grid > div { background: #1c1c1c; }
+.kv-key { color: #4a4a4a; }
+.kv-value { color: #c0c0c0; }
+
+/* 24 — Demo graph box */
+.demo-graph-box { background: #1a1a1a; border: 1px solid #272727; border-radius: 6px; }
+.demo-graph-head { color: #686868; font-size: 11px; }
+
+/* 25 — Layer chips */
+.layer-chip { background: #1e1e1e; border: 1px solid #2a2a2a; color: #545454; font-size: 11px; }
+.layer-chip.active { background: #0f2450; border-color: #1a3d80; color: #7aabff; }
+.layer-chip.disabled { opacity: 0.28; }
+
+/* 26 — Modal */
+.modal-backdrop { background: rgba(0,0,0,0.78); }
+.modal-card { background: #181818; border: 1px solid #2c2c2c; border-radius: 12px; box-shadow: 0 24px 80px rgba(0,0,0,0.7); }
+.modal-head { border-bottom: 1px solid #222222; }
+.modal-title { color: #e0e0e0; font-size: 14px; }
+.modal-content { background: #1c1c1c; border: 1px solid #262626; border-radius: 8px; }
+.modal-section-title { color: #484848; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+
+/* 27 — Tooltip */
+.tooltip { background: #232323; border: 1px solid #333333; color: #c8c8c8; border-radius: 7px; }
+
+/* 28 — Dividers */
+.divider { background: #252525; }
+.split-row .muted { color: #3a3a3a; font-size: 11px; }
+
+/* 29 — Tour card (refresh) */
+.tour-card { background: #141414; border: 1px solid #2d2d2d; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.7); }
+.tour-count { color: #2e5faa; }
+.tour-title { color: #eeeeee; }
+.tour-body { color: #7a7a7a; }
+
+/* 30 — Tour trigger (refresh) */
+.tour-trigger { background: transparent; border-color: #242424; color: #a7f3b5; }
+.tour-trigger:hover { background: #1c1c1c; border-color: #333333; color: #c4f9cd; transform: none; }
+
+/* 31 — Pulse animation for tour-triggered button */
+@keyframes tourBtnPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(75,158,255,0.5); }
+  60%  { box-shadow: 0 0 0 6px rgba(75,158,255,0); }
+  100% { box-shadow: 0 0 0 0   rgba(75,158,255,0); }
+}
+.tour-hint-pulse { animation: tourBtnPulse 1.2s ease 3; }
+
+/* 32 — Skeleton stats */
+#skeletonStats { background: #1a1a1a; border: 1px solid #252525; color: #585858; border-radius: 6px; }
+
+/* 33 — Comparison board in right rail (re-reset) */
+.compare-board { margin-top: 6px; gap: 8px; }
+
+/* 34 — Step-color left border on control blocks (per-step system) */
+/* Override the earlier step-color system so it integrates with new design */
+[data-mode-panel="load2d"]    .control-block { border-left: 2px solid rgba(75,158,255,.3); }
+[data-mode-panel="map3d"]     .control-block { border-left: 2px solid rgba(167,139,250,.3); }
+[data-mode-panel="bundle"]    .control-block { border-left: 2px solid rgba(251,146,60,.3); }
+[data-mode-panel="compare"]   .control-block { border-left: 2px solid rgba(52,211,153,.3); }
+[data-mode-panel="fabricate"] .control-block { border-left: 2px solid rgba(248,113,113,.3); }
+[data-mode-panel="style"]     .control-block { border-left: 2px solid rgba(244,114,182,.3); }
+[data-mode-panel="export"]    .control-block { border-left: 2px solid rgba(34,211,238,.3); }
+
+/* 35 — Step 1 demo graph chooser */
 .demo-graph-box {
   margin-top: 8px;
   padding: 10px;
@@ -1284,3 +1958,175 @@ body[data-ui-theme="light-gray"] #viewportStage {
   left: 86px;
   width: min(360px, calc(100vw - 140px));
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   BRIGHTNESS & CLARITY PASS
+   Removes the two shadow boxes at the bottom of the viewport.
+   Lifts the entire surface stack so panels, rails, and borders are distinct.
+════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Remove the wizard flow caption entirely ── */
+.wizard-flow-caption { display: none !important; }
+.wizard-footer        { display: none !important; }
+
+/* ── 2. Status bar → flat borderless text strip, no box ── */
+#statusBar {
+  background: transparent !important;
+  border: none !important;
+  border-top: 1px solid #202020 !important;
+  border-radius: 0 !important;
+  left: 0 !important; right: 0 !important; bottom: 0 !important;
+  padding: 5px 16px !important;
+  color: #404040 !important;
+  font-size: 10px !important;
+  letter-spacing: 0.04em;
+  z-index: 6;
+}
+#statusText  { color: #404040; }
+#statusStats { color: #383838; }
+
+/* ── 3. Rail brightness lift ── */
+.wizard-rail   { background: #1c1c1c; border-color: #282828; }
+.right-rail    { border-color: #282828; }
+.rail-header   { background: #191919; border-bottom-color: #272727; }
+.rail-footer   { background: #191919; border-top-color: #272727; }
+.rail-title    { color: #b8b8b8; }
+.rail-subtitle { color: #8e8e8e; }
+
+/* ── 4. Control blocks: lifted surface + stronger border ── */
+.control-block { background: #252525; border-color: #333333; }
+.control-block summary            { color: #808080; }
+.control-block summary::after     { color: #404040; }
+.control-block[open] > summary    { color: #b8b8b8; border-bottom-color: #2d2d2d; }
+.control-block[open] > summary::after { color: #555555; }
+.control-block summary:hover      { background: rgba(255,255,255,0.025); }
+
+/* ── 5. Form elements: lifted ── */
+select,
+input[type="text"],
+input[type="number"],
+input[type="file"] {
+  background: #1d1d1d !important;
+  border-color: #343434 !important;
+  color: #e0e0e0 !important;
+}
+input[type="color"] { background: #1d1d1d !important; border-color: #343434 !important; }
+.field > span  { color: #646464; }
+.checkbox      { color: #8a8a8a; }
+
+/* ── 6. Buttons: lifted ── */
+button                { background: #282828; border-color: #363636; color: #cccccc; }
+button:hover          { background: #313131; border-color: #424242; color: #e0e0e0; }
+button.ghost          { background: transparent; border-color: #2a2a2a; color: #646464; }
+button.ghost:hover    { background: #232323; border-color: #383838; color: #909090; }
+button.primary        { background: #1b4299; border-color: #2355c0; color: #ccdcff; }
+button.primary:hover  { background: #204daf; border-color: #2c65d8; }
+
+/* ── 7. Top navigator: slightly lifted ── */
+.top-navigator   { background: #141414; border-bottom-color: #272727; }
+.mode-tab        { color: #525252; }
+.mode-tab:hover  { background: #1f1f1f; border-color: #2e2e2e; color: #828282; }
+.mode-tab.active { background: #232323; border-color: #363636; color: #e8e8e8; }
+.step-num        { background: #232323; border-color: #363636; }
+
+/* ── 8. Scene tools: floats ABOVE the viewport (lighter than --studio-bg #252525) ── */
+.scene-tools       { background: #2e2e2e; border-color: #3d3d3d; }
+.scene-tools-head  { border-bottom-color: #363636; }
+.scene-tools-title { color: #707070; font-size: 11px; }
+.scene-tools-subtitle { color: #505050; }
+.scene-tools-collapse { background: #363636; border-color: #424242; color: #888888; }
+.scene-tools .field > span { color: #5a5a5a; }
+.scene-tools select,
+.scene-tools input { background: #262626; border-color: #383838; }
+.scene-tools .checkbox { color: #848484; }
+
+/* ── 9. Floating panels: all lighter than viewport bg ── */
+#selectionCard   { background: #2d2d2d; border-color: #3a3a3a; }
+.hud             { background: #2a2a2a; border-color: #383838; }
+.hud-title       { color: #808080; }
+.hud-content     { color: #787878; }
+
+/* ── 10. Stage nav arrows: lifted above viewport ── */
+.stage-nav       { background: #2c2c2c; border-color: #3a3a3a; color: #787878; }
+.stage-nav:hover { background: #343434; color: #b0b0b0; }
+
+/* ── 11. Viewport FAB: lifted above viewport ── */
+.viewport-fab-btn       { background: #2c2c2c; border-color: #3a3a3a; color: #787878; }
+.viewport-fab-btn:hover { background: #363636; color: #c0c0c0; }
+
+/* ── 12. Wizard hero overlay: floats above viewport ── */
+.wizard-hero          { background: #2e2e2e; border-color: #3c3c3c; }
+.wizard-hero h1       { color: #e8e8e8; }
+.wizard-hero p        { color: #787878; }
+.wizard-hero .eyebrow { color: #585858; }
+
+/* ── 13. Info and hint blocks: lifted ── */
+.info-block, .hint-block {
+  background: #212121;
+  border-color: #2e2e2e;
+  color: #7a7a7a;
+}
+.info-block strong { color: #b4b4b4; }
+.hint-list li      { color: #696969; }
+
+/* ── 14. Chip badges: slightly brighter ── */
+.chip { background: #252525; border-color: #353535; color: #505050; }
+
+/* ── 15. Method cards: lifted ── */
+.method-card        { background: #202020; border-color: #303030; }
+.method-card:hover  { background: #272727; border-color: #3a3a3a; }
+.method-card.active { background: #0e1f3d; border-color: #1d4088; }
+.method-name        { color: #d0d0d0; }
+.method-family, .method-status, .method-badge, .reference-year {
+  background: #282828; border-color: #353535; color: #606060;
+}
+.method-detail    { background: #1e1e1e; border-color: #2e2e2e; }
+.method-detail h3 { color: #d8d8d8; }
+.method-detail p  { color: #707070; }
+.ref-pill         { background: #1c1c1c; border-color: #2a2a2a; }
+.ref-pill-title   { color: #b8b8b8; }
+.ref-pill-meta    { color: #505050; }
+
+/* ── 16. Compare board ── */
+.compare-card   { background: #202020; border-color: #303030; }
+.compare-card h3 { color: #d0d0d0; }
+.compare-metrics { color: #585858; }
+
+/* ── 17. Demo graph box ── */
+.demo-graph-box  { background: #202020; border-color: #303030; }
+.demo-graph-head { color: #707070; }
+
+/* ── 18. Layer chips ── */
+.layer-chip        { background: #202020; border-color: #303030; color: #606060; }
+.layer-chip.active { background: #0e2454; border-color: #1a3d80; color: #7aabff; }
+
+/* ── 19. Tour card: lifted ── */
+.tour-card  { background: #181818; border-color: #303030; }
+.tour-body  { color: #848484; }
+.tour-title { color: #f0f0f0; }
+
+/* ── 20. Tour help button ── */
+.tour-help-btn {
+  color: #505050 !important;
+  border-color: #2d2d2d !important;
+}
+.tour-help-btn:hover { color: #909090 !important; border-color: #3a3a3a !important; }
+
+/* ── 21. KV grid ── */
+.kv-grid > div { background: #202020; }
+.kv-key        { color: #555555; }
+.kv-value      { color: #c8c8c8; }
+
+/* ── 22. Adjust FAB / scene tools spacing now status bar is flat ── */
+.viewport-fab { bottom: 52px; }
+#selectionCard { bottom: 52px; }
+.scene-tools   { max-height: calc(100% - 196px - 120px); }
+
+/* ── 23. Step color left-border: slightly brighter accent ── */
+[data-mode-panel="load2d"]    .control-block { border-left: 2px solid rgba(75,158,255,.4); }
+[data-mode-panel="map3d"]     .control-block { border-left: 2px solid rgba(167,139,250,.4); }
+[data-mode-panel="bundle"]    .control-block { border-left: 2px solid rgba(251,146,60,.4); }
+[data-mode-panel="compare"]   .control-block { border-left: 2px solid rgba(52,211,153,.4); }
+[data-mode-panel="fabricate"] .control-block { border-left: 2px solid rgba(248,113,113,.4); }
+[data-mode-panel="style"]     .control-block { border-left: 2px solid rgba(244,114,182,.4); }
+[data-mode-panel="export"]    .control-block { border-left: 2px solid rgba(34,211,238,.4); }

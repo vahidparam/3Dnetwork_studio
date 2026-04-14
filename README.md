@@ -227,6 +227,19 @@ The studio is literature-aware. The UI surfaces method cards and reference badge
 
 ---
 
+## Deployment
+
+This is a static app.
+
+### GitHub Pages
+1. Push the project to a repository.
+2. Enable GitHub Pages for the main branch or `docs` folder.
+3. Make sure `.nojekyll` remains in place.
+
+### Generic static hosting
+Upload the folder contents directly. The entry point is `index.html`.
+
+---
 
 ## Final note
 

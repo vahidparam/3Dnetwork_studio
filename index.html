@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Network Studio</title>
+  <title>Network Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -22,7 +22,10 @@
     <header id="topNavigator" class="top-navigator">
       <div class="top-brand">
         <div class="eyebrow">Art / Science / Fabrication</div>
-        <div class="brand-title">3D Network Studio</div>
+        <div class="brand-row">
+          <div class="brand-title">Network Studio</div>
+          <button id="tourBtn" class="tour-trigger" title="Start guided tour">&#9654; Tour</button>
+        </div>
       </div>
       <nav id="modeTabs" class="step-tabs" aria-label="Workflow navigator">
         <button class="mode-tab active" data-mode="load2d"><span class="step-num">1</span><span class="step-icon" aria-hidden="true">⬡</span><span class="step-label">Load &amp; 2D</span></button>
@@ -49,7 +52,7 @@
           <div class="panel-head"><h2>Load graph and shape the 2D layout</h2><span class="chip">Start here</span></div>
 
           <details class="control-block" open>
-            <summary>Graph input</summary>
+            <summary data-icon="↓">Graph input</summary>
             <div class="block-body">
               <label class="field">
                 <span>GEXF</span>
@@ -85,8 +88,8 @@
             </div>
           </details>
 
-          <details class="control-block" open>
-            <summary>2D layout</summary>
+          <details class="control-block">
+            <summary data-icon="⊙">2D layout</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field">
@@ -125,8 +128,8 @@
             </div>
           </details>
 
-          <details class="control-block" open>
-            <summary>Node appearance in 2D</summary>
+          <details class="control-block">
+            <summary data-icon="◉">Node appearance in 2D</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field"><span>Node size mode</span>
@@ -166,7 +169,7 @@
           </details>
 
           <details class="control-block">
-            <summary>Filtering and labels</summary>
+            <summary data-icon="⊜">Filtering and labels</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field"><span>Minimum degree</span><input id="degreeMin" type="number" min="0" max="5000" step="1" value="0" /></label>
@@ -184,7 +187,7 @@
         <section class="wizard-panel" data-mode-panel="map3d" data-rail="left">
           <div class="panel-head"><h2>Map the approved 2D layout into 3D</h2><span class="chip">Depth stage</span></div>
           <details class="control-block" open>
-            <summary>3D mapping controls</summary>
+            <summary data-icon="◎">3D mapping controls</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field">
@@ -217,7 +220,7 @@
           <div class="panel-head"><h2>Bundle lab</h2><span class="chip">Algorithm choice</span></div>
           <div id="methodCards" class="method-cards"></div>
           <details class="control-block" open>
-            <summary>Selected method parameters</summary>
+            <summary data-icon="≋">Selected method parameters</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field method-param" data-param="samples"><span>Samples</span><input id="bundleSamples" type="number" min="6" max="64" step="1" value="16" /></label>
@@ -251,7 +254,7 @@
         <section class="wizard-panel" data-mode-panel="compare" data-rail="left">
           <div class="panel-head"><h2>Compare and extract structure</h2><span class="chip">Evaluation</span></div>
           <details class="control-block" open>
-            <summary>Comparison board</summary>
+            <summary data-icon="⇄">Comparison board</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field"><span>Left method</span><select id="compareLeft"></select></label>
@@ -260,8 +263,8 @@
               <button id="runCompareBtn" class="full">Generate comparison</button>
             </div>
           </details>
-          <details class="control-block" open>
-            <summary>Skeleton extraction</summary>
+          <details class="control-block">
+            <summary data-icon="⊸">Skeleton extraction</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field"><span>Grid</span><input id="skeletonGrid" type="number" min="24" max="220" step="2" value="84" /></label>
@@ -274,8 +277,8 @@
               <button id="extractSkeletonBtn" class="primary full">Extract centerlines</button>
             </div>
           </details>
-          <details class="control-block" open>
-            <summary>Display layer</summary>
+          <details class="control-block">
+            <summary data-icon="⊡">Display layer</summary>
             <div class="block-body">
               <label class="field"><span>Active display layer</span>
                 <select id="displayLayer">
@@ -292,7 +295,7 @@
         <section class="wizard-panel" data-mode-panel="fabricate" data-rail="left">
           <div class="panel-head"><h2>Fabricate</h2><span class="chip">Physicalization</span></div>
           <details class="control-block" open>
-            <summary>Physicalization settings</summary>
+            <summary data-icon="▥">Physicalization settings</summary>
             <div class="block-body">
               <label class="field"><span>Fabrication source</span>
                 <select id="fabricationSource">
@@ -344,8 +347,8 @@
               </div>
             </div>
           </details>
-          <details class="control-block" open>
-            <summary>3D export</summary>
+          <details class="control-block">
+            <summary data-icon="⤓">3D export</summary>
             <div class="block-body">
               <div class="inline-actions triple">
                 <button id="exportStlBtn">Export STL</button>
@@ -359,7 +362,7 @@
         <section class="wizard-panel" data-mode-panel="style" data-rail="left">
           <div class="panel-head"><h2>Style studio</h2><span class="chip">Material language</span></div>
           <details class="control-block" open>
-            <summary>Studio look</summary>
+            <summary data-icon="✦">Studio look</summary>
             <div class="block-body">
               <div class="grid2">
                 <label class="field"><span>Style preset</span><select id="stylePreset"></select></label>
@@ -388,7 +391,7 @@
         <section class="wizard-panel" data-mode-panel="export" data-rail="left">
           <div class="panel-head"><h2>Export and save scenes</h2><span class="chip">Finalization</span></div>
           <details class="control-block" open>
-            <summary>Camera and presets</summary>
+            <summary data-icon="⊕">Camera and presets</summary>
             <div class="block-body">
               <div class="inline-actions triple">
                 <button id="cameraIsoBtn">Isometric</button>
@@ -406,8 +409,8 @@
               </div>
             </div>
           </details>
-          <details class="control-block" open>
-            <summary>Screen and state export</summary>
+          <details class="control-block">
+            <summary data-icon="⊞">Screen and state export</summary>
             <div class="block-body">
               <div class="inline-actions triple">
                 <button id="exportPngBtn" class="primary">PNG</button>
@@ -420,6 +423,9 @@
             <button id="openNetworkDetailsBtn" class="ghost small full">Network details…</button>
           </div>
         </section>
+        <div class="rail-footer">
+          <button id="tourHelpBtn" class="tour-help-btn">&#9654; Resume walkthrough</button>
+        </div>
       </aside>
 
       <main id="viewportStage">
@@ -431,9 +437,9 @@
           <h1 id="currentStepTitle">Load your graph and shape the 2D stage</h1>
           <p id="currentStepBody">Start with the demo or your own network, settle the layout, and only then move into depth, bundling, structure, styling, and fabrication.</p>
         </div>
-        <div class="hud" id="selectionCard">
+        <div class="hud hidden" id="selectionCard">
           <div class="hud-head"><div class="hud-title">Selection</div></div>
-          <div id="selectionContent" class="hud-content">Hover or click a node to inspect metadata.</div>
+          <div id="selectionContent" class="hud-content"></div>
         </div>
 
         <aside class="scene-tools" id="sceneToolsPanel" aria-label="Scene tools">
@@ -534,7 +540,7 @@
           <div class="panel-head"><h2>Method guidance</h2><span class="chip">Literature-aware</span></div>
           <div id="methodDetail" class="method-detail"></div>
           <details class="control-block top-gap" open>
-            <summary>Parameter help</summary>
+            <summary data-icon="ⓘ">Parameter help</summary>
             <div id="bundleParameterHelp" class="block-body">
               <div class="hint-block">Choose a method first. Only its relevant controls will remain visible here. Use draft mode to explore quickly, then move to high or export quality for final assets.</div>
             </div>
