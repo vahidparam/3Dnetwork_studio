@@ -544,11 +544,33 @@ export class App {
     if (this.state._lastMobileCompact !== mobileCompact) {
       this.state._lastMobileCompact = mobileCompact;
       if (mobileCompact) {
-        this.setLeftRailCollapsed(true, { skipResize: true });
+        this.setLeftRailCollapsed(false, { skipResize: true });
         this.setRightRailCollapsed(true, { skipResize: true });
       }
     }
+    this.updateMobileStepLayout();
     this.dom.root?.classList.toggle('fs-left-collapsed', !!this.dom.leftRail?.classList.contains('collapsed'));
+  }
+
+  updateMobileStepLayout() {
+    const mobileCompact = !!this.state.mobileCompact;
+    if (mobileCompact) {
+      this.dom.sceneToolsPanel?.classList.add('collapsed');
+      if (this.dom.sceneToolsCollapseBtn) {
+        this.dom.sceneToolsCollapseBtn.textContent = '⟩';
+        this.dom.sceneToolsCollapseBtn.setAttribute('aria-label', 'Expand scene tools');
+      }
+    }
+
+    this.dom.modePanels
+      .filter((panel) => panel.dataset.rail === 'left')
+      .forEach((panel) => {
+        const detailsBlocks = Array.from(panel.querySelectorAll('details.control-block'));
+        detailsBlocks.forEach((block, index) => {
+          if (!mobileCompact) return;
+          block.open = index === 0;
+        });
+      });
   }
 
   setLeftRailCollapsed(collapsed, { skipResize = false } = {}) {
@@ -966,8 +988,12 @@ export class App {
     const safeMode = this.stepOrder.includes(mode) ? mode : this.stepOrder[0];
     const previousMode = this.state.currentMode;
     this.state.currentMode = safeMode;
-    document.body.dataset.currentMode = safeMode;
-    this.dom.modeTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.mode === safeMode));
+    let activeTab = null;
+    this.dom.modeTabs.forEach((tab) => {
+      const isActive = tab.dataset.mode === safeMode;
+      tab.classList.toggle('active', isActive);
+      if (isActive) activeTab = tab;
+    });
     this.dom.modePanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.modePanel === safeMode));
 
     const meta = this.stepMeta[safeMode] || {};
@@ -998,6 +1024,12 @@ export class App {
       }
     }
 
+    if (this.state.mobileCompact && this.dom.leftRail) {
+      this.dom.leftRail.scrollTop = 0;
+      activeTab?.scrollIntoView?.({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }
+
+    this.updateMobileStepLayout();
     this.syncLayoutMetrics();
     this.sceneController.resize();
   }
