@@ -13,7 +13,7 @@ It is designed for researchers, designers, and makers who want to move from anal
 
 A full video walkthrough of the studio is available on YouTube:
 
-**YouTube Demo:** `https://youtu.be/A7anDAYFPbA`
+**YouTube Demo:** `[Watch here](https://youtu.be/A7anDAYFPbA)`
 
 The demo explains:
 - how to load and explore a network,
