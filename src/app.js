@@ -966,6 +966,7 @@ export class App {
     const safeMode = this.stepOrder.includes(mode) ? mode : this.stepOrder[0];
     const previousMode = this.state.currentMode;
     this.state.currentMode = safeMode;
+    document.body.dataset.currentMode = safeMode;
     this.dom.modeTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.mode === safeMode));
     this.dom.modePanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.modePanel === safeMode));
 

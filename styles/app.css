@@ -1229,6 +1229,14 @@ button[data-mode="fabricate"] .step-num { background: rgba(248,113,113,.18); bor
 button[data-mode="style"]     .step-num { background: rgba(244,114,182,.18); border-color: rgba(244,114,182,.4); color: #f9a8d4; }
 button[data-mode="export"]    .step-num { background: rgba(34,211,238,.18);  border-color: rgba(34,211,238,.4);  color: #67e8f9; }
 
+body[data-current-mode="load2d"] .wizard-hero .eyebrow { color: #7db8ff; }
+body[data-current-mode="map3d"] .wizard-hero .eyebrow { color: #c4b5fd; }
+body[data-current-mode="bundle"] .wizard-hero .eyebrow { color: #fdba74; }
+body[data-current-mode="compare"] .wizard-hero .eyebrow { color: #6ee7b7; }
+body[data-current-mode="fabricate"] .wizard-hero .eyebrow { color: #fca5a5; }
+body[data-current-mode="style"] .wizard-hero .eyebrow { color: #f9a8d4; }
+body[data-current-mode="export"] .wizard-hero .eyebrow { color: #67e8f9; }
+
 /* Control block left accent border: per step */
 [data-mode-panel="load2d"]    .control-block { border-left: 3px solid rgba(75,158,255,.5); }
 [data-mode-panel="map3d"]     .control-block { border-left: 3px solid rgba(167,139,250,.5); }
