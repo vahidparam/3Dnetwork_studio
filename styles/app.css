@@ -636,12 +636,12 @@ code { font-family: "IBM Plex Mono", monospace; }
     top: 64px;
   }
   .workspace.mobile-compact .scene-tools {
-    top: 64px;
     right: 12px;
+    bottom: 166px;
     width: 214px;
-    max-height: calc(100% - 64px - 170px);
+    max-height: calc(100% - 176px);
   }
-  .workspace.mobile-compact .scene-tools.collapsed { width: 164px; }
+  .workspace.mobile-compact .scene-tools.collapsed { width: 156px; }
   .workspace.mobile-compact #selectionCard {
     right: 12px;
     bottom: 120px;
@@ -848,12 +848,12 @@ code { font-family: "IBM Plex Mono", monospace; }
 /* v3 UX: always-on scene tools + bottom details drawer */
 .scene-tools {
   position: absolute;
-  top: 196px;
+  bottom: 164px;
   right: 18px;
   z-index: 24;
   width: 278px;
   max-width: calc(100% - 36px);
-  max-height: calc(100% - 196px - 320px);
+  max-height: calc(100% - 160px);
   background: rgba(7, 15, 28, 0.86);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 18px;
@@ -861,7 +861,7 @@ code { font-family: "IBM Plex Mono", monospace; }
   backdrop-filter: blur(18px);
   overflow: auto;
 }
-.scene-tools.collapsed { width: 176px; }
+.scene-tools.collapsed { width: 168px; }
 .scene-tools-head {
   display: flex;
   align-items: center;
@@ -879,9 +879,7 @@ code { font-family: "IBM Plex Mono", monospace; }
 }
 .scene-tools-body { padding: 0 10px 10px; }
 .scene-tools.collapsed .scene-tools-subtitle { display: none; }
-.scene-tools.collapsed .scene-tools-grid { display: none; }
-.scene-tools.collapsed .scene-tools-body { padding: 0 10px 10px; }
-.scene-tools.collapsed .scene-tools-body .top-gap .small { display: none; }
+.scene-tools.collapsed .scene-tools-body { display: none; }
 
 .details-toggle {
   position: absolute;
@@ -980,7 +978,7 @@ code { font-family: "IBM Plex Mono", monospace; }
   .scene-tools { width: 280px; }
 }
 @media (max-width: 760px) {
-  .scene-tools { top: 148px; right: 12px; width: 246px; max-height: calc(100% - 148px - 300px); }
+  .scene-tools { right: 12px; bottom: 160px; width: 246px; max-height: calc(100% - 172px); }
   #selectionCard {
     right: 12px;
     bottom: 136px;
@@ -1977,13 +1975,13 @@ body[data-ui-theme="light-gray"] #viewportStage {
   border-radius: 0 !important;
   left: 0 !important; right: 0 !important; bottom: 0 !important;
   padding: 5px 16px !important;
-  color: #404040 !important;
+  color: #767676 !important;
   font-size: 10px !important;
   letter-spacing: 0.04em;
   z-index: 6;
 }
-#statusText  { color: #404040; }
-#statusStats { color: #383838; }
+#statusText  { color: #7a7a7a; }
+#statusStats { color: #666666; }
 
 /* ── 3. Rail brightness lift ── */
 .wizard-rail   { background: #1c1c1c; border-color: #282828; }
@@ -1995,7 +1993,7 @@ body[data-ui-theme="light-gray"] #viewportStage {
 
 /* ── 4. Control blocks: lifted surface + stronger border ── */
 .control-block { background: #252525; border-color: #333333; }
-.control-block summary            { color: #808080; }
+.control-block summary            { color: #989898; }
 .control-block summary::after     { color: #404040; }
 .control-block[open] > summary    { color: #b8b8b8; border-bottom-color: #2d2d2d; }
 .control-block[open] > summary::after { color: #555555; }
@@ -2011,8 +2009,8 @@ input[type="file"] {
   color: #e0e0e0 !important;
 }
 input[type="color"] { background: #1d1d1d !important; border-color: #343434 !important; }
-.field > span  { color: #646464; }
-.checkbox      { color: #8a8a8a; }
+.field > span  { color: #888888; }
+.checkbox      { color: #a2a2a2; }
 
 /* ── 6. Buttons: lifted ── */
 button                { background: #282828; border-color: #363636; color: #cccccc; }
@@ -2024,21 +2022,21 @@ button.primary:hover  { background: #204daf; border-color: #2c65d8; }
 
 /* ── 7. Top navigator: slightly lifted ── */
 .top-navigator   { background: #141414; border-bottom-color: #272727; }
-.mode-tab        { color: #525252; }
-.mode-tab:hover  { background: #1f1f1f; border-color: #2e2e2e; color: #828282; }
+.mode-tab        { color: #8f8f8f; }
+.mode-tab:hover  { background: #1f1f1f; border-color: #2e2e2e; color: #b0b0b0; }
 .mode-tab.active { background: #232323; border-color: #363636; color: #e8e8e8; }
 .step-num        { background: #232323; border-color: #363636; }
 
 /* ── 8. Scene tools: floats ABOVE the viewport (lighter than --studio-bg #252525) ── */
 .scene-tools       { background: #2e2e2e; border-color: #3d3d3d; }
 .scene-tools-head  { border-bottom-color: #363636; }
-.scene-tools-title { color: #707070; font-size: 11px; }
-.scene-tools-subtitle { color: #505050; }
+.scene-tools-title { color: #9a9a9a; font-size: 11px; }
+.scene-tools-subtitle { color: #787878; }
 .scene-tools-collapse { background: #363636; border-color: #424242; color: #888888; }
-.scene-tools .field > span { color: #5a5a5a; }
+.scene-tools .field > span { color: #8c8c8c; }
 .scene-tools select,
 .scene-tools input { background: #262626; border-color: #383838; }
-.scene-tools .checkbox { color: #848484; }
+.scene-tools .checkbox { color: #a6a6a6; }
 
 /* ── 9. Floating panels: all lighter than viewport bg ── */
 #selectionCard   { background: #2d2d2d; border-color: #3a3a3a; }
@@ -2120,7 +2118,7 @@ button.primary:hover  { background: #204daf; border-color: #2c65d8; }
 /* ── 22. Adjust FAB / scene tools spacing now status bar is flat ── */
 .viewport-fab { bottom: 52px; }
 #selectionCard { bottom: 52px; }
-.scene-tools   { max-height: calc(100% - 196px - 120px); }
+.scene-tools   { max-height: calc(100% - 160px); }
 
 /* ── 23. Step color left-border: slightly brighter accent ── */
 [data-mode-panel="load2d"]    .control-block { border-left: 2px solid rgba(75,158,255,.4); }

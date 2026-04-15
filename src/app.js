@@ -452,7 +452,7 @@ export class App {
       displayLayer: 'bundle',
       fabricationInfo: null,
       showNodes: true,
-      showLabels: true,
+      showLabels: false,
       showGeometry: true,
       layoutVersion: 0,
       bundleCache: new Map(),
@@ -621,7 +621,10 @@ export class App {
     this.dom.sceneToolsCollapseBtn?.addEventListener('click', () => {
       this.dom.sceneToolsPanel?.classList.toggle('collapsed');
       const collapsed = this.dom.sceneToolsPanel?.classList.contains('collapsed');
-      if (this.dom.sceneToolsCollapseBtn) this.dom.sceneToolsCollapseBtn.textContent = collapsed ? '⟩' : '⟨';
+      if (this.dom.sceneToolsCollapseBtn) {
+        this.dom.sceneToolsCollapseBtn.textContent = collapsed ? '⟩' : '⟨';
+        this.dom.sceneToolsCollapseBtn.setAttribute('aria-label', collapsed ? 'Expand scene tools' : 'Collapse scene tools');
+      }
       this.syncLayoutMetrics();
       this.sceneController.resize();
     });
@@ -709,6 +712,7 @@ export class App {
       const color = this.dom.quickBackgroundColor.value || getStylePreset(this.dom.stylePreset.value).background;
       this.sceneController.setBackground(color);
       document.documentElement.style.setProperty('--studio-bg', color);
+      this.refreshEncodingsAndLayers();
     });
     this.dom.quickEdgeOpacity?.addEventListener('input', () => {
       this.dom.edgeOpacity.value = this.dom.quickEdgeOpacity.value;
@@ -741,6 +745,7 @@ export class App {
       if (this.dom.quickBackgroundColor) this.dom.quickBackgroundColor.value = color;
       this.sceneController.setBackground(color);
       document.documentElement.style.setProperty('--studio-bg', color);
+      this.refreshEncodingsAndLayers();
     });
     this.dom.edgeOpacity?.addEventListener('input', () => {
       if (this.dom.quickEdgeOpacity) this.dom.quickEdgeOpacity.value = this.dom.edgeOpacity.value;

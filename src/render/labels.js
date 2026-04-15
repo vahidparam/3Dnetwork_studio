@@ -36,7 +36,7 @@ export class LabelRenderer {
     this.items = [];
     this.labelIndexes = Array.from(indexSet);
 
-    const color = colorLuminance(background) < 0.45 ? '#f8fbff' : '#16213b';
+    const color = colorLuminance(background) < 0.45 ? '#f8fbff' : '#111111';
     this.lastColor = color;
     this.lastFontSize = fontSize;
 
