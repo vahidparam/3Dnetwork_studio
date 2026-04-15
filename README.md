@@ -14,7 +14,7 @@ It is designed for researchers, designers, and makers who want to move from anal
 
 A full video walkthrough of the studio is available on YouTube:
 
-**YouTube Demo:** `[Watch here](https://youtu.be/A7anDAYFPbA)`
+**YouTube Demo:** https://youtu.be/A7anDAYFPbA
 
 The demo explains:
 - how to load and explore a network,
@@ -235,7 +235,7 @@ The studio is literature-aware. The UI surfaces method cards and reference badge
 
 The easiest way to understand the full workflow is through the video demo:
 
-**Watch the full walkthrough on YouTube:** `[Watch here](https://youtu.be/A7anDAYFPbA)`
+**Watch the full walkthrough on YouTube:** https://youtu.be/A7anDAYFPbA
 
 You can also open the live version here:
 
