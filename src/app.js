@@ -461,7 +461,9 @@ export class App {
       suppressClick: false,
       uiTheme: 'dark-gray',
       mobileCompact: false,
+      tabletCompact: false,
       _lastMobileCompact: null,
+      _lastTabletCompact: null,
       tourIndex: 0
     };
 
@@ -539,8 +541,11 @@ export class App {
     const navHeight = Math.max(72, Math.ceil(this.dom.topNavigator?.getBoundingClientRect().height || 88));
     document.documentElement.style.setProperty('--topbar-h', `${navHeight}px`);
     const mobileCompact = window.innerWidth <= 760;
+    const tabletCompact = window.innerWidth > 760 && window.innerWidth <= 1180;
     this.state.mobileCompact = mobileCompact;
+    this.state.tabletCompact = tabletCompact;
     this.dom.workspace?.classList.toggle('mobile-compact', mobileCompact);
+    this.dom.workspace?.classList.toggle('tablet-compact', tabletCompact);
     if (this.state._lastMobileCompact !== mobileCompact) {
       this.state._lastMobileCompact = mobileCompact;
       if (mobileCompact) {
@@ -548,13 +553,22 @@ export class App {
         this.setRightRailCollapsed(true, { skipResize: true });
       }
     }
-    this.updateMobileStepLayout();
+    if (this.state._lastTabletCompact !== tabletCompact) {
+      this.state._lastTabletCompact = tabletCompact;
+      if (tabletCompact) {
+        this.setLeftRailCollapsed(true, { skipResize: true });
+        this.setRightRailCollapsed(true, { skipResize: true });
+      }
+    }
+    this.updateCompactStepLayout();
     this.dom.root?.classList.toggle('fs-left-collapsed', !!this.dom.leftRail?.classList.contains('collapsed'));
   }
 
-  updateMobileStepLayout() {
+  updateCompactStepLayout() {
     const mobileCompact = !!this.state.mobileCompact;
-    if (mobileCompact) {
+    const tabletCompact = !!this.state.tabletCompact;
+    const compactViewport = mobileCompact || tabletCompact;
+    if (compactViewport) {
       this.dom.sceneToolsPanel?.classList.add('collapsed');
       if (this.dom.sceneToolsCollapseBtn) {
         this.dom.sceneToolsCollapseBtn.textContent = '⟩';
@@ -567,8 +581,8 @@ export class App {
       .forEach((panel) => {
         const detailsBlocks = Array.from(panel.querySelectorAll('details.control-block'));
         detailsBlocks.forEach((block, index) => {
-          if (!mobileCompact) return;
-          block.open = index === 0;
+          if (!compactViewport) return;
+          block.open = mobileCompact ? false : index === 0;
         });
       });
   }
@@ -995,6 +1009,7 @@ export class App {
       if (isActive) activeTab = tab;
     });
     this.dom.modePanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.modePanel === safeMode));
+    document.body.dataset.currentMode = safeMode;
 
     const meta = this.stepMeta[safeMode] || {};
     if (this.dom.currentStepLabel) this.dom.currentStepLabel.textContent = meta.label || 'Step';
@@ -1024,12 +1039,12 @@ export class App {
       }
     }
 
-    if (this.state.mobileCompact && this.dom.leftRail) {
+    if ((this.state.mobileCompact || this.state.tabletCompact) && this.dom.leftRail) {
       this.dom.leftRail.scrollTop = 0;
       activeTab?.scrollIntoView?.({ inline: 'center', block: 'nearest', behavior: 'smooth' });
     }
 
-    this.updateMobileStepLayout();
+    this.updateCompactStepLayout();
     this.syncLayoutMetrics();
     this.sceneController.resize();
   }
