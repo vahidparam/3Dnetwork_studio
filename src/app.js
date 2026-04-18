@@ -252,6 +252,64 @@ function summarizeNode(node) {
   `;
 }
 
+function normalizeSearchText(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function buildNodeSearchCandidates(node = {}) {
+  const candidates = [];
+  const seen = new Set();
+
+  const pushCandidate = (key, value, weight = 0) => {
+    const text = String(value ?? '').trim();
+    if (!text) return;
+    const variants = [
+      { normalized: normalizeSearchText(text), bonus: weight },
+      { normalized: normalizeSearchText(`${key} ${text}`), bonus: weight - 4 },
+      { normalized: normalizeSearchText(`${key}:${text}`), bonus: weight - 2 }
+    ];
+    variants.forEach((variant) => {
+      if (!variant.normalized) return;
+      const dedupeKey = `${key}|${variant.normalized}`;
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      candidates.push({ normalized: variant.normalized, bonus: variant.bonus });
+    });
+  };
+
+  pushCandidate('label', node.label, 28);
+  pushCandidate('id', node.id, 26);
+  pushCandidate('color', node.color, 10);
+  if (Number.isFinite(Number(node.size))) pushCandidate('size', node.size, 8);
+  Object.entries(node.attrs || {}).forEach(([key, value]) => pushCandidate(key, value, 12));
+
+  return candidates;
+}
+
+function scoreNodeSearchMatch(node, query, isVisible = true) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return Number.NEGATIVE_INFINITY;
+  const terms = normalizedQuery.split(' ').filter(Boolean);
+  if (!terms.length) return Number.NEGATIVE_INFINITY;
+
+  let bestScore = Number.NEGATIVE_INFINITY;
+  buildNodeSearchCandidates(node).forEach(({ normalized, bonus }) => {
+    if (!terms.every((term) => normalized.includes(term))) return;
+    let score = 36 + bonus;
+    if (normalized === normalizedQuery) score += 72;
+    else if (normalized.startsWith(normalizedQuery)) score += 44;
+    else score += 18;
+    score -= Math.min(80, normalized.length) * 0.05;
+    if (isVisible) score += 6;
+    bestScore = Math.max(bestScore, score);
+  });
+
+  return bestScore;
+}
+
 export class App {
   constructor() {
     this.dom = {
@@ -261,6 +319,7 @@ export class App {
       topNavigator: getEl('topNavigator'),
       leftRail: getEl('leftRail'),
       rightRail: getEl('rightRail'),
+      themeToggleBtn: getEl('themeToggleBtn'),
       toggleLeftRailBtn: getEl('toggleLeftRailBtn'),
       toggleRightRailBtn: getEl('toggleRightRailBtn'),
       modeTabs: Array.from(document.querySelectorAll('.mode-tab')),
@@ -290,12 +349,27 @@ export class App {
       quickShowNodes: getEl('quickShowNodes'),
       quickShowLabels: getEl('quickShowLabels'),
       quickShowGeometry: getEl('quickShowGeometry'),
+      nodeSearchInput: getEl('nodeSearchInput'),
+      nodeSearchBtn: getEl('nodeSearchBtn'),
+      nodeSearchClearBtn: getEl('nodeSearchClearBtn'),
+      nodeSearchStatus: getEl('nodeSearchStatus'),
+      nodeSearchMatches: getEl('nodeSearchMatches'),
       statusText: getEl('statusText'),
       statusStats: getEl('statusStats'),
       progressOverlay: getEl('progressOverlay'),
       progressTitle: getEl('progressTitle'),
       progressBar: getEl('progressBar'),
       progressValue: getEl('progressValue'),
+      startupLoadModal: getEl('startupLoadModal'),
+      closeStartupLoadBtn: getEl('closeStartupLoadBtn'),
+      startupChooseGexfBtn: getEl('startupChooseGexfBtn'),
+      startupChooseNodesCsvBtn: getEl('startupChooseNodesCsvBtn'),
+      startupChooseEdgesCsvBtn: getEl('startupChooseEdgesCsvBtn'),
+      startupLoadGraphBtn: getEl('startupLoadGraphBtn'),
+      startupGexfFileName: getEl('startupGexfFileName'),
+      startupNodesCsvFileName: getEl('startupNodesCsvFileName'),
+      startupEdgesCsvFileName: getEl('startupEdgesCsvFileName'),
+      startupSampleButtons: Array.from(document.querySelectorAll('[data-demo-value]')),
       methodCards: getEl('methodCards'),
       methodDetail: getEl('methodDetail'),
       referenceDrawer: getEl('referenceDrawer'),
@@ -337,6 +411,8 @@ export class App {
 
       degreeMin: getEl('degreeMin'),
       labelCount: getEl('labelCount'),
+      labelAttr: getEl('labelAttr'),
+      labelScale: getEl('labelScale'),
       filterAttr: getEl('filterAttr'),
       filterValue: getEl('filterValue'),
       applyFilterBtn: getEl('applyFilterBtn'),
@@ -454,6 +530,9 @@ export class App {
       showNodes: true,
       showLabels: false,
       showGeometry: true,
+      activeSceneTool: null,
+      activeWorkflowTool: null,
+      sceneControlPanelOpen: true,
       layoutVersion: 0,
       bundleCache: new Map(),
       currentMode: 'load2d',
@@ -516,6 +595,10 @@ export class App {
     this.dragHit = new THREE.Vector3();
 
     this.populateStaticUi();
+    this.setupTopNavActions();
+    this.setupLeftWorkflowToolbar();
+    this.setupSceneToolbar();
+    this.setLeftRailCollapsed(true, { skipResize: true });
     this.bindEvents();
     this.applyUiTheme(this.state.uiTheme);
     this.updateFullscreenUi();
@@ -523,16 +606,27 @@ export class App {
     this.setMode('load2d');
     this.setRightRailCollapsed(true, { skipResize: true });
     this.applyStylePresetUi();
-    // Override initial background to dark gray
-    const _initBg = '#252525';
-    if (this.dom.backgroundColor) this.dom.backgroundColor.value = _initBg;
-    if (this.dom.quickBackgroundColor) this.dom.quickBackgroundColor.value = _initBg;
-    this.sceneController.setBackground(_initBg);
-    document.documentElement.style.setProperty('--studio-bg', _initBg);
+    this.applyThemeSceneBackground(this.state.uiTheme);
     this.updateStatus('Ready. Load a graph or choose one of the classic demo networks in Step 1.');
     this.refreshPresetSelect();
     this.renderEmptyState();
+    this.setStartupLoadModal(true);
     this.initTour();
+  }
+
+  setupTopNavActions() {
+    const topNavigator = this.dom.topNavigator;
+    const modeTabs = this.dom.modeTabs?.[0]?.closest?.('#modeTabs') || getEl('modeTabs');
+    const themeToggleBtn = this.dom.themeToggleBtn;
+    if (!topNavigator || !modeTabs || !themeToggleBtn) return;
+
+    let actions = topNavigator.querySelector('.top-nav-actions');
+    if (!actions) {
+      actions = document.createElement('div');
+      actions.className = 'top-nav-actions';
+      modeTabs.insertAdjacentElement('afterend', actions);
+    }
+    actions.append(modeTabs, themeToggleBtn);
   }
 
   syncLayoutMetrics() {
@@ -544,11 +638,30 @@ export class App {
     if (this.state._lastMobileCompact !== mobileCompact) {
       this.state._lastMobileCompact = mobileCompact;
       if (mobileCompact) {
-        this.setLeftRailCollapsed(true, { skipResize: true });
+        this.setLeftRailCollapsed(false, { skipResize: true });
         this.setRightRailCollapsed(true, { skipResize: true });
       }
     }
+    this.updateMobileStepLayout();
     this.dom.root?.classList.toggle('fs-left-collapsed', !!this.dom.leftRail?.classList.contains('collapsed'));
+  }
+
+  updateMobileStepLayout() {
+    const mobileCompact = !!this.state.mobileCompact;
+    if (mobileCompact) {
+      this.setSceneControlPanelOpen(false);
+      this.setActiveWorkflowTool(null);
+    }
+
+    this.dom.modePanels
+      .filter((panel) => panel.dataset.rail === 'left')
+      .forEach((panel) => {
+        const detailsBlocks = Array.from(panel.querySelectorAll('details.control-block'));
+        detailsBlocks.forEach((block, index) => {
+          if (!mobileCompact) return;
+          block.open = index === 0;
+        });
+      });
   }
 
   setLeftRailCollapsed(collapsed, { skipResize = false } = {}) {
@@ -572,10 +685,32 @@ export class App {
     }
   }
 
-  applyUiTheme() {
-    const safeTheme = 'dark-gray';
+  applyUiTheme(theme = this.state.uiTheme) {
+    const safeTheme = theme === 'light-gray' ? 'light-gray' : 'dark-gray';
     this.state.uiTheme = safeTheme;
     document.body.dataset.uiTheme = safeTheme;
+    if (this.dom.themeToggleBtn) {
+      const nextTheme = safeTheme === 'light-gray' ? 'dark-gray' : 'light-gray';
+      const nextLabel = nextTheme === 'light-gray' ? 'Switch to light theme' : 'Switch to dark theme';
+      this.dom.themeToggleBtn.dataset.theme = safeTheme;
+      this.dom.themeToggleBtn.title = nextLabel;
+      this.dom.themeToggleBtn.setAttribute('aria-label', nextLabel);
+    }
+    this.applyThemeSceneBackground(safeTheme);
+  }
+
+  toggleUiTheme() {
+    this.applyUiTheme(this.state.uiTheme === 'light-gray' ? 'dark-gray' : 'light-gray');
+    this.updateStatus(`Switched to ${this.state.uiTheme === 'light-gray' ? 'light' : 'dark'} theme.`);
+  }
+
+  applyThemeSceneBackground(theme = this.state.uiTheme) {
+    const background = theme === 'light-gray' ? '#ffffff' : '#252525';
+    if (this.dom.backgroundColor) this.dom.backgroundColor.value = background;
+    if (this.dom.quickBackgroundColor) this.dom.quickBackgroundColor.value = background;
+    this.sceneController.setBackground(background);
+    document.documentElement.style.setProperty('--studio-bg', background);
+    if (this.state.graph) this.refreshVisibleLayer();
   }
 
   async toggleFullscreen() {
@@ -601,10 +736,12 @@ export class App {
   }
 
   bindEvents() {
-    this.dom.toggleLeftRailBtn?.addEventListener('click', () => {
-      const collapsed = !this.dom.leftRail?.classList.contains('collapsed');
-      this.setLeftRailCollapsed(collapsed);
+    this.dom.leftWorkflowToolRail?.addEventListener('click', (event) => {
+      const button = event.target?.closest?.('[data-workflow-tool]');
+      if (!button) return;
+      this.toggleWorkflowTool(button.dataset.workflowTool);
     });
+    this.dom.leftWorkflowToolboxCloseBtn?.addEventListener('click', () => this.setActiveWorkflowTool(null));
 
     this.dom.toggleRightRailBtn?.addEventListener('click', () => {
       const collapsed = !this.dom.rightRail?.classList.contains('collapsed');
@@ -614,17 +751,13 @@ export class App {
     this.dom.modeTabs.forEach((tab) => {
       tab.addEventListener('click', () => this.setMode(tab.dataset.mode));
     });
+    this.dom.themeToggleBtn?.addEventListener('click', () => this.toggleUiTheme());
 
     this.dom.prevStepBtn?.addEventListener('click', () => this.goStep(-1));
     this.dom.nextStepBtn?.addEventListener('click', () => this.goStep(1));
 
     this.dom.sceneToolsCollapseBtn?.addEventListener('click', () => {
-      this.dom.sceneToolsPanel?.classList.toggle('collapsed');
-      const collapsed = this.dom.sceneToolsPanel?.classList.contains('collapsed');
-      if (this.dom.sceneToolsCollapseBtn) {
-        this.dom.sceneToolsCollapseBtn.textContent = collapsed ? '⟩' : '⟨';
-        this.dom.sceneToolsCollapseBtn.setAttribute('aria-label', collapsed ? 'Expand scene tools' : 'Collapse scene tools');
-      }
+      this.toggleSceneControlPanel();
       this.syncLayoutMetrics();
       this.sceneController.resize();
     });
@@ -635,10 +768,27 @@ export class App {
     this.dom.networkDetailsModal?.addEventListener('click', (event) => {
       const target = event.target;
       if (target?.dataset?.modalClose) this.setNetworkDetailsModal(false);
+      if (target?.dataset?.startupModalClose) this.setStartupLoadModal(false);
     });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') this.setNetworkDetailsModal(false);
+      if (event.key === 'Escape') this.setStartupLoadModal(false);
     });
+
+    this.dom.closeStartupLoadBtn?.addEventListener('click', () => this.setStartupLoadModal(false));
+    this.dom.startupChooseGexfBtn?.addEventListener('click', () => this.dom.gexfFile?.click());
+    this.dom.startupChooseNodesCsvBtn?.addEventListener('click', () => this.dom.nodesCsvFile?.click());
+    this.dom.startupChooseEdgesCsvBtn?.addEventListener('click', () => this.dom.edgesCsvFile?.click());
+    this.dom.startupLoadGraphBtn?.addEventListener('click', () => this.loadUploadedGraph());
+    this.dom.startupSampleButtons?.forEach((button) => {
+      button.addEventListener('click', () => {
+        if (this.dom.demoGraphSelect) this.dom.demoGraphSelect.value = button.dataset.demoValue || 'les-miserables';
+        this.loadDemoGraph();
+      });
+    });
+    this.dom.gexfFile?.addEventListener('change', () => this.updateStartupLoadSummary());
+    this.dom.nodesCsvFile?.addEventListener('change', () => this.updateStartupLoadSummary());
+    this.dom.edgesCsvFile?.addEventListener('change', () => this.updateStartupLoadSummary());
 
     this.dom.detailsToggleBtn?.addEventListener('click', () => {
       this.dom.detailsDrawer?.classList.toggle('collapsed');
@@ -727,9 +877,32 @@ export class App {
       this.state.showLabels = !!this.dom.quickShowLabels.checked;
       this.refreshEncodingsAndLayers();
     });
+    this.dom.labelAttr?.addEventListener('change', () => {
+      this.refreshVisibleLayer();
+      this.updateStatus(`Labels now show ${this.dom.labelAttr?.value || 'label'}.`);
+    });
+    this.dom.labelScale?.addEventListener('input', () => {
+      this.refreshVisibleLayer();
+    });
     this.dom.quickShowGeometry?.addEventListener('change', () => {
       this.state.showGeometry = !!this.dom.quickShowGeometry.checked;
       this.refreshVisibleLayer();
+    });
+    this.dom.nodeSearchBtn?.addEventListener('click', () => this.runNodeSearch());
+    this.dom.nodeSearchClearBtn?.addEventListener('click', () => this.clearNodeSearch());
+    this.dom.nodeSearchInput?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.runNodeSearch();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.clearNodeSearch({ clearInput: true, clearSelection: false, clearFeedback: true });
+      }
+    });
+    this.dom.nodeSearchInput?.addEventListener('input', () => {
+      this.updateNodeSearchSuggestions();
     });
     this.dom.applyStyleBtn.addEventListener('click', () => {
       this.applyStylePresetUi();
@@ -825,6 +998,298 @@ export class App {
         </article>
       `)
       .join('');
+  }
+
+  setupSceneToolbar() {
+    const panel = this.dom.sceneToolsPanel;
+    const body = panel?.querySelector('.scene-tools-body');
+    if (!panel || !body) return;
+
+    const labelFor = (input) => input?.closest('label');
+    const statesBlock = body.querySelector('.top-gap');
+    const quickBackground = labelFor(this.dom.quickBackgroundColor);
+    const quickEdgeOpacity = labelFor(this.dom.quickEdgeOpacity);
+    const quickShowNodes = labelFor(this.dom.quickShowNodes);
+    const quickShowLabels = labelFor(this.dom.quickShowLabels);
+    const labelCountField = document.createElement('label');
+    labelCountField.className = 'field compact';
+    labelCountField.innerHTML = '<span>Visible label count</span>';
+    const labelCountInput = document.createElement('input');
+    labelCountInput.id = 'labelCount';
+    labelCountInput.type = 'number';
+    labelCountInput.min = '0';
+    labelCountInput.max = '200';
+    labelCountInput.step = '1';
+    labelCountInput.value = String(this.dom.labelCount?.value || '18');
+    labelCountField.append(labelCountInput);
+    const labelAttrField = document.createElement('label');
+    labelAttrField.className = 'field compact';
+    labelAttrField.innerHTML = '<span>Label attribute</span>';
+    const labelAttrSelect = document.createElement('select');
+    labelAttrSelect.id = 'labelAttr';
+    labelAttrField.append(labelAttrSelect);
+    const labelScaleField = document.createElement('label');
+    labelScaleField.className = 'field compact';
+    labelScaleField.innerHTML = '<span>Label scale</span>';
+    const labelScaleInput = document.createElement('input');
+    labelScaleInput.id = 'labelScale';
+    labelScaleInput.type = 'number';
+    labelScaleInput.min = '0.1';
+    labelScaleInput.max = '3';
+    labelScaleInput.step = '0.1';
+    labelScaleInput.value = '1';
+    labelScaleField.append(labelScaleInput);
+
+    const controlPanel = document.createElement('div');
+    controlPanel.className = 'scene-control-panel';
+
+    const controlHead = document.createElement('div');
+    controlHead.className = 'scene-control-panel-head';
+    const headCopy = document.createElement('div');
+    headCopy.innerHTML = '<div class="scene-control-panel-title">Control Panel</div><div class="scene-control-panel-subtitle">Visibility, labels, and look</div>';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'scene-control-panel-toggle';
+    toggleBtn.setAttribute('aria-label', 'Collapse control panel');
+    toggleBtn.setAttribute('aria-expanded', 'true');
+    toggleBtn.textContent = '−';
+    controlHead.append(headCopy, toggleBtn);
+
+    const controlBody = document.createElement('div');
+    controlBody.className = 'scene-control-panel-body';
+    const panelCopy = document.createElement('div');
+    panelCopy.className = 'scene-tool-panel-copy';
+    panelCopy.textContent = 'Scene controls stay together here so you can adjust visibility, label source, and styling in one place.';
+    const controlGrid = document.createElement('div');
+    controlGrid.className = 'scene-control-grid';
+    const labelRow = document.createElement('div');
+    labelRow.className = 'scene-control-label-row';
+    if (quickShowLabels) labelRow.append(quickShowLabels);
+    labelRow.append(labelAttrField);
+    [
+      quickBackground,
+      quickEdgeOpacity,
+      quickShowNodes
+    ].filter(Boolean).forEach((node) => controlGrid.append(node));
+    controlBody.append(panelCopy, labelRow, labelCountField, labelScaleField, controlGrid);
+    if (statesBlock) controlBody.append(statesBlock);
+
+    controlPanel.append(controlHead, controlBody);
+    panel.replaceChildren(controlPanel);
+    this.dom.sceneToolbox = controlPanel;
+    this.dom.sceneToolboxTitle = headCopy.querySelector('.scene-control-panel-title');
+    this.dom.sceneToolboxBody = controlBody;
+    this.dom.sceneToolsCollapseBtn = toggleBtn;
+    this.dom.sceneToolButtons = [];
+    this.dom.sceneToolPanels = [];
+    this.dom.sceneToolboxCloseBtn = null;
+    this.dom.labelCount = labelCountInput;
+    this.dom.labelAttr = labelAttrSelect;
+    this.dom.labelScale = labelScaleInput;
+    this.setSceneControlPanelOpen(true);
+  }
+
+  setSceneControlPanelOpen(open = true) {
+    this.state.sceneControlPanelOpen = !!open;
+    if (this.dom.sceneToolbox) this.dom.sceneToolbox.classList.toggle('collapsed', !this.state.sceneControlPanelOpen);
+    if (this.dom.sceneToolboxBody) this.dom.sceneToolboxBody.classList.toggle('hidden', !this.state.sceneControlPanelOpen);
+    if (this.dom.sceneToolsCollapseBtn) {
+      this.dom.sceneToolsCollapseBtn.textContent = this.state.sceneControlPanelOpen ? '−' : '+';
+      this.dom.sceneToolsCollapseBtn.setAttribute('aria-expanded', this.state.sceneControlPanelOpen ? 'true' : 'false');
+      this.dom.sceneToolsCollapseBtn.setAttribute('aria-label', this.state.sceneControlPanelOpen ? 'Collapse control panel' : 'Open control panel');
+    }
+  }
+
+  toggleSceneControlPanel() {
+    this.setSceneControlPanelOpen(!this.state.sceneControlPanelOpen);
+  }
+
+  getNodeLabelText(node = {}) {
+    const key = this.dom.labelAttr?.value || 'label';
+    const direct = key === 'label' ? node.label : key === 'id' ? node.id : (node.attrs?.[key] ?? node[key]);
+    const text = String(direct ?? '').trim();
+    if (text) return text;
+    return String(node.label || node.id || '').trim();
+  }
+
+  setupLeftWorkflowToolbar() {
+    const rail = this.dom.leftRail;
+    if (!rail) return;
+    const panels = this.dom.modePanels.filter((panel) => panel.dataset.rail === 'left');
+    const footer = rail.querySelector('.rail-footer');
+    if (!panels.length) return;
+
+    rail.classList.add('left-workflow-toolbar');
+
+    const toolbox = document.createElement('div');
+    toolbox.className = 'left-workflow-toolbox hidden';
+
+    const toolboxHead = document.createElement('div');
+    toolboxHead.className = 'left-workflow-toolbox-head';
+    const toolboxTitle = document.createElement('div');
+    toolboxTitle.className = 'left-workflow-toolbox-title';
+    toolboxTitle.textContent = 'Workflow';
+    const toolboxClose = document.createElement('button');
+    toolboxClose.type = 'button';
+    toolboxClose.className = 'left-workflow-toolbox-close';
+    toolboxClose.setAttribute('aria-label', 'Close workflow panel');
+    toolboxClose.textContent = 'X';
+    toolboxHead.append(toolboxTitle, toolboxClose);
+
+    const toolboxBody = document.createElement('div');
+    toolboxBody.className = 'left-workflow-toolbox-body';
+    panels.forEach((panel) => {
+      panel.classList.add('left-workflow-panel');
+      toolboxBody.append(panel);
+    });
+    toolbox.append(toolboxHead, toolboxBody);
+
+    const toolRail = document.createElement('div');
+    toolRail.className = 'left-workflow-toolbar-rail';
+
+    rail.replaceChildren(toolRail, toolbox);
+    if (footer) rail.append(footer);
+
+    this.dom.leftWorkflowPanels = panels;
+    this.dom.leftWorkflowToolRail = toolRail;
+    this.dom.leftWorkflowToolbox = toolbox;
+    this.dom.leftWorkflowToolboxTitle = toolboxTitle;
+    this.dom.leftWorkflowToolboxCloseBtn = toolboxClose;
+    this.dom.leftWorkflowToolButtons = [];
+    this.dom.leftWorkflowToolsByMode = new Map();
+    this.dom.toggleLeftRailBtn = null;
+    this.refreshLeftWorkflowToolbar(this.state.currentMode || 'load2d');
+  }
+
+  getWorkflowToolIcon(label = '') {
+    const text = String(label || '').toLowerCase();
+    if (text.includes('graph') || text.includes('input')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9"/><path d="M6.5 8.8 10 12.3l3.5-3.5"/><path d="M4 15.5h12"/></svg>';
+    }
+    if (text.includes('layout')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M4.5 5.5h4v4h-4z"/><path d="M11.5 5.5h4v4h-4z"/><path d="M8.5 7.5h3"/><path d="M10 9.5v4"/><path d="M7.5 13.5h5"/></svg>';
+    }
+    if (text.includes('appearance') || text.includes('style')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M4 13.5c0 1.4 1.1 2.5 2.5 2.5 1 0 1.7-.6 2.3-1.2l6.3-6.3a2.6 2.6 0 0 0-3.6-3.6L5.2 11.2C4.6 11.8 4 12.5 4 13.5Z"/><path d="M11.2 5.2 14.8 8.8"/></svg>';
+    }
+    if (text.includes('filter') || text.includes('label')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M4 5h12"/><path d="M6.5 9.2h7"/><path d="M8.5 13.5h3"/></svg>';
+    }
+    if (text.includes('mapping') || text.includes('3d') || text.includes('depth')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3.2 4.5 6v8l5.5 2.8 5.5-2.8V6Z"/><path d="M10 3.2V11"/><path d="M4.5 6 10 9l5.5-3"/></svg>';
+    }
+    if (text.includes('comparison') || text.includes('compare')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3.5 6.5h5v7h-5z"/><path d="M11.5 6.5h5v7h-5z"/><path d="M8.5 10h3"/></svg>';
+    }
+    if (text.includes('skeleton')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 4.5v11"/><path d="M6 7.2 10 10l4-2.8"/><path d="M6 12.8 10 10l4 2.8"/></svg>';
+    }
+    if (text.includes('display') || text.includes('layer')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 4 4.5 7 10 10l5.5-3Z"/><path d="M4.5 10.2 10 13.2l5.5-3"/><path d="M4.5 13.3 10 16.3l5.5-3"/></svg>';
+    }
+    if (text.includes('physical') || text.includes('fabricat')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5 6.5h10v7H5z"/><path d="M7 4.2h6"/><path d="M7.3 13.5h5.4"/></svg>';
+    }
+    if (text.includes('export')) {
+      return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 12.5V4"/><path d="M6.8 7.2 10 4l3.2 3.2"/><path d="M4 15.5h12"/></svg>';
+    }
+    return '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="3.2"/><path d="M2.2 10s2.8-5 7.8-5 7.8 5 7.8 5-2.8 5-7.8 5-7.8-5-7.8-5Z"/></svg>';
+  }
+
+  getWorkflowToolLabel(summaryText = '', mode = '') {
+    const text = String(summaryText || '').trim();
+    const modeMap = {
+      load2d: { 'Graph input': 'Graph', '2D layout': 'Layout', 'Node appearance in 2D': 'Nodes', 'Filtering and labels': 'Filter' },
+      map3d: { '3D mapping controls': 'Mapping' },
+      bundle: { 'Selected method parameters': 'Params' },
+      compare: { 'Comparison board': 'Compare', 'Skeleton extraction': 'Skeleton', 'Display layer': 'Layer' },
+      fabricate: { 'Physicalization settings': 'Build', '3D export': 'Export' },
+      style: { 'Studio look': 'Look' },
+      export: { 'Camera and presets': 'Camera', 'Screen and state export': 'Export' }
+    };
+    return modeMap[mode]?.[text] || text.replace(/\s+and\s+.*/i, '').replace(/\s+in\s+\d+d/i, '').trim();
+  }
+
+  getWorkflowModeLabel(mode = this.state.currentMode) {
+    const labels = {
+      load2d: 'Load & 2D',
+      map3d: '3D Mapping',
+      bundle: 'Bundle',
+      compare: 'Compare',
+      fabricate: 'Fabricate',
+      style: 'Style',
+      export: 'Export'
+    };
+    return labels[mode] || 'Workflow';
+  }
+
+  refreshLeftWorkflowToolbar(mode = this.state.currentMode) {
+    const toolRail = this.dom.leftWorkflowToolRail;
+    const panels = this.dom.leftWorkflowPanels || [];
+    if (!toolRail || !panels.length) return;
+    const currentPanel = panels.find((panel) => panel.dataset.modePanel === mode) || null;
+    toolRail.innerHTML = '';
+    this.dom.leftWorkflowToolButtons = [];
+    if (!currentPanel) return;
+
+    const tools = Array.from(currentPanel.querySelectorAll('details.control-block')).map((block, index) => {
+      const summary = block.querySelector('summary');
+      const title = summary?.textContent?.trim() || `Tool ${index + 1}`;
+      return {
+        id: `${mode}:${index}`,
+        label: this.getWorkflowToolLabel(title, mode),
+        title,
+        icon: this.getWorkflowToolIcon(title),
+        block
+      };
+    });
+    currentPanel.dataset.workflowMode = mode;
+    this.dom.leftWorkflowToolsByMode.set(mode, tools);
+
+    tools.forEach((tool) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'left-workflow-toolbar-btn';
+      button.dataset.workflowTool = tool.id;
+      button.setAttribute('aria-label', `${tool.title} tools`);
+      button.innerHTML = `
+        <span class="left-workflow-toolbar-glyph">${tool.icon}</span>
+        <span class="left-workflow-toolbar-label">${htmlEscape(tool.label)}</span>
+      `;
+      toolRail.append(button);
+    });
+    this.dom.leftWorkflowToolButtons = Array.from(toolRail.querySelectorAll('[data-workflow-tool]'));
+  }
+
+  toggleWorkflowTool(toolId) {
+    if (!toolId) return;
+    const nextTool = this.state.activeWorkflowTool === toolId ? null : toolId;
+    this.setActiveWorkflowTool(nextTool);
+  }
+
+  setActiveWorkflowTool(toolId = null) {
+    const mode = this.state.currentMode;
+    const tools = this.dom.leftWorkflowToolsByMode?.get(mode) || [];
+    const activeTool = tools.find((tool) => tool.id === toolId) || null;
+    this.state.activeWorkflowTool = activeTool?.id || null;
+    this.dom.leftWorkflowToolButtons?.forEach((button) => {
+      button.classList.toggle('active', button.dataset.workflowTool === this.state.activeWorkflowTool);
+    });
+    if (this.dom.leftWorkflowPanels?.length) {
+      this.dom.leftWorkflowPanels.forEach((panel) => {
+        const isCurrentMode = panel.dataset.modePanel === mode;
+        panel.classList.toggle('active', isCurrentMode);
+        if (!isCurrentMode) return;
+        Array.from(panel.querySelectorAll('details.control-block')).forEach((block) => {
+          block.open = !!activeTool && block === activeTool.block;
+        });
+      });
+    }
+    if (this.dom.leftWorkflowToolbox) this.dom.leftWorkflowToolbox.classList.toggle('hidden', !activeTool);
+    if (this.dom.leftWorkflowToolboxTitle) {
+      const modeLabel = this.getWorkflowModeLabel(mode);
+      this.dom.leftWorkflowToolboxTitle.textContent = activeTool ? `${activeTool.title} · ${modeLabel}` : modeLabel;
+    }
   }
 
   updateMethodSelectionUi() {
@@ -966,7 +1431,12 @@ export class App {
     const safeMode = this.stepOrder.includes(mode) ? mode : this.stepOrder[0];
     const previousMode = this.state.currentMode;
     this.state.currentMode = safeMode;
-    this.dom.modeTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.mode === safeMode));
+    let activeTab = null;
+    this.dom.modeTabs.forEach((tab) => {
+      const isActive = tab.dataset.mode === safeMode;
+      tab.classList.toggle('active', isActive);
+      if (isActive) activeTab = tab;
+    });
     this.dom.modePanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.modePanel === safeMode));
 
     const meta = this.stepMeta[safeMode] || {};
@@ -997,8 +1467,16 @@ export class App {
       }
     }
 
+    if (this.state.mobileCompact && this.dom.leftRail) {
+      this.dom.leftRail.scrollTop = 0;
+      activeTab?.scrollIntoView?.({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }
+
+    this.updateMobileStepLayout();
     this.syncLayoutMetrics();
     this.sceneController.resize();
+    this.refreshLeftWorkflowToolbar(safeMode);
+    this.setActiveWorkflowTool(null);
   }
 
   goStep(direction = 1) {
@@ -1027,8 +1505,10 @@ export class App {
     this.dom.layerContent.innerHTML = 'Display layer: raw graph.';
     this.dom.skeletonStats.innerHTML = 'No skeleton extracted yet.';
     this.dom.printabilityPanel.innerHTML = 'Build a physical model to see printability hints.';
+    this.clearNodeSearch({ clearInput: true, clearSelection: false, clearFeedback: true });
     this.syncQuickSceneTools();
     this.renderLayerAvailability();
+    this.updateStartupLoadSummary();
   }
 
   setNetworkDetailsModal(isOpen) {
@@ -1049,6 +1529,19 @@ export class App {
     }
   }
 
+  setStartupLoadModal(isOpen) {
+    const modal = this.dom.startupLoadModal;
+    if (!modal) return;
+    modal.classList.toggle('hidden', !isOpen);
+    if (isOpen) this.updateStartupLoadSummary();
+  }
+
+  updateStartupLoadSummary() {
+    if (this.dom.startupGexfFileName) this.dom.startupGexfFileName.textContent = this.dom.gexfFile?.files?.[0]?.name || 'No GEXF selected';
+    if (this.dom.startupNodesCsvFileName) this.dom.startupNodesCsvFileName.textContent = this.dom.nodesCsvFile?.files?.[0]?.name || 'No nodes CSV selected';
+    if (this.dom.startupEdgesCsvFileName) this.dom.startupEdgesCsvFileName.textContent = this.dom.edgesCsvFile?.files?.[0]?.name || 'No edges CSV selected';
+  }
+
 
   makeFlatViewPositions() {
     return clonePositions(this.state.positions2D.map((p) => ({ x: p.x, y: p.y, z: 0 })));
@@ -1067,7 +1560,7 @@ export class App {
   rebuildRawLayer() {
     if (!this.state.graph) return;
     const quality = getQualityPreset(this.state.quality || this.dom.qualityMode.value);
-    const raw = buildRawPolylines(this.state.graph, this.state.positions3D, this.state.visibleMask, quality.maxEdges);
+    const raw = buildRawPolylines(this.state.graph, this.state.positions3D, this.getRenderableVisibleMask(), quality.maxEdges);
     this.state.rawPolylines = raw.map((entry) => entry.points);
     this.state.rawEdgeLookup = raw.map((entry) => entry.edgeIndex);
   }
@@ -1109,6 +1602,7 @@ export class App {
       const name = gexfFile?.name || `${nodesCsvFile?.name || 'nodes'} + ${edgesCsvFile?.name || 'edges'}`;
       this.loadGraph(rawGraph, name);
       this.updateStatus(`Loaded ${name}.`, `Nodes: ${this.state.graph.nodes.length.toLocaleString()} · Edges: ${this.state.graph.edges.length.toLocaleString()}`);
+      this.setStartupLoadModal(false);
     } catch (error) {
       console.error(error);
       this.updateStatus(`Load failed: ${error?.message || 'Unknown error'}`);
@@ -1123,6 +1617,7 @@ export class App {
     const label = DEMO_GRAPH_OPTIONS.find((entry) => entry.value === key)?.label || rawGraph.name || 'Demo graph';
     this.loadGraph(rawGraph, label);
     this.updateStatus(`Loaded demo graph: ${label}.`, `Nodes: ${this.state.graph.nodes.length.toLocaleString()} · Edges: ${this.state.graph.edges.length.toLocaleString()}`);
+    this.setStartupLoadModal(false);
   }
 
   loadGraph(rawGraph, name = 'Graph') {
@@ -1137,6 +1632,7 @@ export class App {
     this.state.skeletonStats = null;
     this.state.selectedNodeIndex = null;
     this.state.hoveredNodeIndex = null;
+    this.clearNodeSearch({ clearInput: true, clearSelection: false, clearFeedback: true });
     this.clearFabricationPreview(false);
 
     const existing2D = graph.flags.has2DPositions
@@ -1166,6 +1662,16 @@ export class App {
     setOptions(this.dom.colorAttr, allAttrs, { includeBlank: true });
     setOptions(this.dom.filterAttr, categoricalAttrs, { includeBlank: true, blankLabel: 'All nodes' });
     setOptions(this.dom.layerAttr, categoricalAttrs, { includeBlank: true });
+    if (this.dom.labelAttr) {
+      const labelChoices = Array.from(new Set(['label', 'id', ...allAttrs]));
+      this.dom.labelAttr.innerHTML = '';
+      labelChoices.forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value === 'label' ? 'Label' : value === 'id' ? 'ID' : value;
+        this.dom.labelAttr.appendChild(option);
+      });
+    }
     const shapeAttrs = Array.from(new Set(['color', ...allAttrs]));
     setOptions(this.dom.nodeShapeAttr, shapeAttrs, { includeBlank: true, blankLabel: 'Pick an attribute' });
 
@@ -1179,6 +1685,8 @@ export class App {
     if (preferredLayer) this.dom.layerAttr.value = preferredLayer;
     const preferredFilter = categoricalAttrs.includes('community') ? 'community' : categoricalAttrs[0] || '';
     if (preferredFilter) this.dom.filterAttr.value = preferredFilter;
+    const preferredLabel = allAttrs.includes('title') ? 'title' : allAttrs.includes('name') ? 'name' : 'label';
+    if (this.dom.labelAttr) this.dom.labelAttr.value = preferredLabel;
     const preferredShapeAttr = categoricalAttrs.includes('community') ? 'community' : (shapeAttrs.includes('color') ? 'color' : shapeAttrs[0] || '');
     if (preferredShapeAttr) this.dom.nodeShapeAttr.value = preferredShapeAttr;
     this.populateFilterValues();
@@ -1406,13 +1914,27 @@ export class App {
     return { focusSet, focusEdgeSet };
   }
 
+  getRenderableVisibleMask(focusSet = null) {
+    const graph = this.state.graph;
+    if (!graph) return [];
+    const baseMask = Array.isArray(this.state.visibleMask) && this.state.visibleMask.length === graph.nodes.length
+      ? this.state.visibleMask.slice()
+      : graph.nodes.map(() => true);
+    if (!focusSet?.size) return baseMask;
+    focusSet.forEach((index) => {
+      if (index >= 0 && index < baseMask.length) baseMask[index] = true;
+    });
+    return baseMask;
+  }
+
   renderNodes() {
     const { focusSet } = this.getFocusContext();
+    const renderableMask = this.getRenderableVisibleMask(focusSet);
     this.nodeRenderer.update({
       positions: this.state.positions3D,
       sizes: this.state.nodeSizes,
       colors: this.state.nodeColors,
-      visibleMask: this.state.visibleMask,
+      visibleMask: renderableMask,
       emphasisSet: focusSet,
       selectedIndex: this.state.selectedNodeIndex ?? -1,
       dimOpacity: 0.1
@@ -1469,6 +1991,7 @@ export class App {
     this.rebuildRawLayer();
     const layer = this.getCurrentLayerPayload();
     const { focusSet, focusEdgeSet } = this.getFocusContext();
+    const renderableMask = this.getRenderableVisibleMask(focusSet);
     const emphasisMask = layer.lookup.map((edgeIndex) => focusEdgeSet.has(edgeIndex));
 
     if (layer.name === 'fabrication' && this.fabricationGroup) {
@@ -1492,15 +2015,17 @@ export class App {
     this.labelRenderer.update({
       labelsEnabled: this.state.showLabels && (Number(this.dom.labelCount.value) || 0) > 0,
       count: Number(this.dom.labelCount.value) || 0,
-      fontSize: 12,
+      fontSize: 12 * (Number(this.dom.labelScale?.value) || 1),
       nodes: graph.nodes,
+      sizes: this.state.nodeSizes,
+      getLabel: (node) => this.getNodeLabelText(node),
       positions: this.state.positions3D,
       metrics: graph.metrics,
       camera: this.sceneController.camera,
       viewportWidth: this.dom.viewport.clientWidth,
       viewportHeight: this.dom.viewport.clientHeight,
       background: this.dom.backgroundColor?.value || getStylePreset(this.dom.stylePreset.value).background,
-      visibleMask: this.state.visibleMask,
+      visibleMask: renderableMask,
       focusIndexes: Array.from(focusSet)
     });
 
@@ -1595,6 +2120,139 @@ export class App {
       <div class="top-gap small"><strong>Neighbors</strong>: ${neighbors.length ? htmlEscape(neighbors.join(', ')) : 'None'}</div>
     `;
     card?.classList.remove('hidden');
+  }
+
+  setNodeSearchFeedback(message = '', state = '') {
+    if (!this.dom.nodeSearchStatus) return;
+    this.dom.nodeSearchStatus.textContent = message;
+    if (state) this.dom.nodeSearchStatus.dataset.state = state;
+    else delete this.dom.nodeSearchStatus.dataset.state;
+  }
+
+  renderNodeSearchMatches(matches = [], query = '') {
+    const container = this.dom.nodeSearchMatches;
+    const graph = this.state.graph;
+    if (!container || !graph || !query || !matches.length) {
+      if (container) {
+        container.innerHTML = '';
+        container.classList.add('hidden');
+      }
+      return;
+    }
+
+    const visibleMatches = matches.slice(0, 6);
+    container.innerHTML = visibleMatches.map(({ index }) => {
+      const node = graph.nodes[index] || {};
+      const label = node.label || node.id || `Node ${index + 1}`;
+      const attrs = Object.entries(node.attrs || {})
+        .slice(0, 2)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(' · ');
+      return `
+        <button class="footer-search-match" type="button" data-node-search-match="${index}">
+          <div class="footer-search-match-head">
+            <span class="footer-search-match-title">${htmlEscape(label)}</span>
+            <span class="footer-search-match-meta">ID: ${htmlEscape(node.id || '—')}</span>
+          </div>
+          ${attrs ? `<div class="footer-search-match-note">${htmlEscape(attrs)}</div>` : ''}
+        </button>
+      `;
+    }).join('');
+    container.classList.remove('hidden');
+    Array.from(container.querySelectorAll('[data-node-search-match]')).forEach((button) => {
+      button.addEventListener('click', () => {
+        const index = Number(button.dataset.nodeSearchMatch);
+        this.selectNodeSearchMatch(index, { matchesCount: matches.length });
+      });
+    });
+  }
+
+  updateNodeSearchSuggestions() {
+    const graph = this.state.graph;
+    const query = this.dom.nodeSearchInput?.value?.trim() || '';
+    if (!graph) {
+      this.renderNodeSearchMatches([], '');
+      this.setNodeSearchFeedback(query ? 'Load a graph before searching nodes.' : '', query ? 'error' : '');
+      return [];
+    }
+    if (!query) {
+      this.renderNodeSearchMatches([], '');
+      this.setNodeSearchFeedback('');
+      return [];
+    }
+
+    const matches = this.findNodeMatches(query);
+    this.renderNodeSearchMatches(matches, query);
+    if (!matches.length) {
+      this.setNodeSearchFeedback(`No nodes matched "${query}".`, 'error');
+    } else {
+      this.setNodeSearchFeedback(
+        `${matches.length} match${matches.length === 1 ? '' : 'es'} found. Press Enter or click a result.`,
+        ''
+      );
+    }
+    return matches;
+  }
+
+  findNodeMatches(query) {
+    const graph = this.state.graph;
+    if (!graph) return [];
+    return graph.nodes
+      .map((node, index) => ({
+        index,
+        score: scoreNodeSearchMatch(node, query, !!this.state.visibleMask?.[index])
+      }))
+      .filter((entry) => Number.isFinite(entry.score))
+      .sort((a, b) => b.score - a.score || a.index - b.index);
+  }
+
+  selectNode(nodeIndex, { syncHover = false } = {}) {
+    if (!this.state.graph) return;
+    const safeIndex = Number.isInteger(nodeIndex) && nodeIndex >= 0 && nodeIndex < this.state.graph.nodes.length
+      ? nodeIndex
+      : null;
+    this.state.selectedNodeIndex = safeIndex;
+    if (syncHover) this.state.hoveredNodeIndex = safeIndex;
+    this.dom.tooltip?.classList.add('hidden');
+    this.renderNodes();
+    this.refreshVisibleLayer();
+    this.updateSelectionPanel();
+  }
+
+  selectNodeSearchMatch(index, { matchesCount = 1 } = {}) {
+    const graph = this.state.graph;
+    if (!graph) return;
+    const node = graph.nodes[index];
+    if (!node) return;
+    const label = node.label || node.id || `Node ${index + 1}`;
+    if (this.dom.nodeSearchInput) this.dom.nodeSearchInput.value = label;
+    this.selectNode(index, { syncHover: true });
+    this.renderNodeSearchMatches([], '');
+    this.setNodeSearchFeedback(
+      matchesCount > 1 ? `Showing ${label} (${matchesCount} matches).` : `Showing ${label}.`,
+      'success'
+    );
+    this.updateStatus(`Highlighted node ${label} from search. Immediate neighbors are emphasized as well.`);
+  }
+
+  runNodeSearch() {
+    const query = this.dom.nodeSearchInput?.value?.trim() || '';
+    if (!query) {
+      this.renderNodeSearchMatches([], '');
+      this.setNodeSearchFeedback('Type a label, id, or attribute value to search.');
+      return;
+    }
+    const matches = this.updateNodeSearchSuggestions();
+    if (!matches.length) return;
+    this.selectNodeSearchMatch(matches[0].index, { matchesCount: matches.length });
+  }
+
+  clearNodeSearch({ clearInput = true, clearSelection = false, clearFeedback = true } = {}) {
+    if (clearInput && this.dom.nodeSearchInput) this.dom.nodeSearchInput.value = '';
+    if (clearFeedback) this.setNodeSearchFeedback('');
+    this.renderNodeSearchMatches([], '');
+    if (!clearSelection || !this.state.graph) return;
+    this.selectNode(null);
   }
 
   updateMetricsPanel(layer = this.getCurrentLayerPayload()) {
@@ -2082,6 +2740,8 @@ export class App {
         colorAttr: this.dom.colorAttr.value,
         edgeColorMode: this.dom.edgeColorMode.value,
         constantNodeColor: this.dom.constantNodeColor.value,
+        labelAttr: this.dom.labelAttr?.value,
+        labelScale: this.dom.labelScale?.value,
         backgroundColor: this.dom.backgroundColor?.value,
         focusDim: this.dom.focusDim?.value,
         displayLayer: this.dom.displayLayer.value,
@@ -2152,7 +2812,7 @@ export class App {
       polylines: this.edgeRenderer.lastDraw.polylines,
       edgeColors: this.edgeRenderer.lastDraw.colors,
       edgeOpacity: this.edgeRenderer.lastDraw.opacity,
-      labels: this.labelRenderer.exportLabels(this.state.graph.nodes, this.state.positions3D)
+      labels: this.labelRenderer.exportLabels(this.state.graph.nodes, this.state.positions3D, (node) => this.getNodeLabelText(node))
     });
     downloadText(svg, `${this.safeFileStem()}.svg`, 'image/svg+xml;charset=utf-8');
   }
@@ -2200,10 +2860,11 @@ export class App {
     if (!this.state.graph || !this.state.positions3D?.length || !this.state.showNodes) return null;
     const rect = this.pointerFromEvent(event);
     const graph = this.state.graph;
+    const pickableMask = this.getRenderableVisibleMask(this.getFocusContext().focusSet);
     let bestIndex = null;
     let bestScore = Infinity;
     for (let i = 0; i < graph.nodes.length; i += 1) {
-      if (!this.state.visibleMask[i]) continue;
+      if (!pickableMask[i]) continue;
       const pos = this.state.positions3D[i];
       if (!pos) continue;
       const projected = new THREE.Vector3(pos.x, pos.y, pos.z || 0).project(this.sceneController.camera);
@@ -2328,15 +2989,11 @@ export class App {
 
   commitSelectionFromHover() {
     if (!this.state.graph) return;
-    if (this.state.hoveredNodeIndex == null) {
-      this.state.selectedNodeIndex = null;
-    } else if (this.state.selectedNodeIndex === this.state.hoveredNodeIndex) {
-      this.state.selectedNodeIndex = null;
-    } else {
-      this.state.selectedNodeIndex = this.state.hoveredNodeIndex;
+    let nextIndex = null;
+    if (this.state.hoveredNodeIndex != null && this.state.selectedNodeIndex !== this.state.hoveredNodeIndex) {
+      nextIndex = this.state.hoveredNodeIndex;
     }
-    this.renderNodes();
-    this.refreshVisibleLayer();
-    this.updateSelectionPanel();
+    this.selectNode(nextIndex);
   }
 }
+

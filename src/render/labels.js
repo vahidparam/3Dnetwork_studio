@@ -6,17 +6,20 @@ export class LabelRenderer {
     this.container = container;
     this.items = [];
     this.labelIndexes = [];
-    this.lastColor = '#f8fbff';
+    this.lastColor = '#ffffff';
+    this.lastBg = 'rgba(15, 23, 42, 0.6)';
     this.lastFontSize = 12;
+    this.lastFontSizes = [];
   }
 
   clear() {
     this.container.innerHTML = '';
     this.items = [];
     this.labelIndexes = [];
+    this.lastFontSizes = [];
   }
 
-  update({ labelsEnabled, count, fontSize, nodes, positions, metrics, camera, viewportWidth, viewportHeight, background, visibleMask = null, focusIndexes = [] }) {
+  update({ labelsEnabled, count, fontSize, nodes, sizes = [], positions, metrics, camera, viewportWidth, viewportHeight, background, visibleMask = null, focusIndexes = [], getLabel = null }) {
     if (!labelsEnabled || !nodes?.length || count <= 0) {
       this.clear();
       return;
@@ -36,18 +39,26 @@ export class LabelRenderer {
     this.items = [];
     this.labelIndexes = Array.from(indexSet);
 
-    const color = colorLuminance(background) < 0.45 ? '#f8fbff' : '#111111';
+    const darkScene = colorLuminance(background) < 0.5;
+    const color = darkScene ? '#ffffff' : '#000000';
+    const badgeBg = darkScene ? 'rgba(15, 23, 42, 0.6)' : 'rgba(255, 255, 255, 0.92)';
     this.lastColor = color;
+    this.lastBg = badgeBg;
     this.lastFontSize = fontSize;
+    this.lastFontSizes = [];
 
     for (const idx of this.labelIndexes) {
+      const nodeSize = Number(sizes?.[idx]) || 1;
+      const resolvedFontSize = Math.max(10, Math.min(22, fontSize + (nodeSize - 1) * 2.4));
       const div = document.createElement('div');
       div.className = 'label-item';
-      div.textContent = nodes[idx].label || nodes[idx].id;
-      div.style.fontSize = `${fontSize}px`;
+      div.textContent = getLabel ? getLabel(nodes[idx], idx) : (nodes[idx].label || nodes[idx].id);
+      div.style.fontSize = `${resolvedFontSize}px`;
       div.style.color = color;
+      div.style.background = badgeBg;
       this.container.appendChild(div);
       this.items.push(div);
+      this.lastFontSizes.push(resolvedFontSize);
     }
 
     this.project(positions, camera, viewportWidth, viewportHeight);
@@ -72,13 +83,13 @@ export class LabelRenderer {
     }
   }
 
-  exportLabels(nodes, positions) {
+  exportLabels(nodes, positions, getLabel = null) {
     if (!this.labelIndexes.length) return [];
-    return this.labelIndexes.map((idx) => ({
-      text: nodes[idx]?.label || nodes[idx]?.id || '',
+    return this.labelIndexes.map((idx, order) => ({
+      text: getLabel ? getLabel(nodes[idx], idx) : (nodes[idx]?.label || nodes[idx]?.id || ''),
       position: positions[idx],
       color: this.lastColor,
-      fontSize: this.lastFontSize
+      fontSize: this.lastFontSizes[order] || this.lastFontSize
     }));
   }
 }

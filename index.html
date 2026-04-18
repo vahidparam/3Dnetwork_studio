@@ -24,6 +24,10 @@
         <div class="eyebrow">Art / Science / Fabrication</div>
         <div class="brand-row">
           <div class="brand-title">Network Studio</div>
+          <button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="Switch to light theme" aria-label="Switch to light theme">
+            <span class="theme-toggle-icon theme-toggle-sun" aria-hidden="true">☀</span>
+            <span class="theme-toggle-icon theme-toggle-moon" aria-hidden="true">☾</span>
+          </button>
           <button id="tourBtn" class="tour-trigger" title="Start guided tour">&#9654; Tour</button>
         </div>
       </div>
@@ -442,8 +446,8 @@
           <div id="selectionContent" class="hud-content"></div>
         </div>
 
-        <aside class="scene-tools collapsed" id="sceneToolsPanel" aria-label="Scene tools">
-          <div class="scene-tools-head">
+        <aside class="scene-toolbar" id="sceneToolsPanel" aria-label="Scene tools">
+          <div id="sceneToolbox" class="scene-toolbox hidden">
             <div>
               <div class="scene-tools-title">Scene tools</div>
               <div class="scene-tools-subtitle">Always-on controls</div>
@@ -464,7 +468,6 @@
               <label class="field compact"><span>Edge opacity</span><input id="quickEdgeOpacity" type="number" min="0.02" max="1" step="0.02" value="0.3" /></label>
               <label class="checkbox compact"><input id="quickShowNodes" type="checkbox" checked /><span>Show nodes</span></label>
               <label class="checkbox compact"><input id="quickShowLabels" type="checkbox" /><span>Show labels</span></label>
-              <label class="checkbox compact"><input id="quickShowGeometry" type="checkbox" checked /><span>Show active layer geometry</span></label>
             </div>
             <div class="top-gap">
               <div class="small muted">Available scene states (drives export)</div>
@@ -480,6 +483,22 @@
 
         <div class="wizard-footer">
           <div class="wizard-flow-caption">Use the top navigator to jump, or move step-by-step like a studio workflow.</div>
+        </div>
+
+        <div id="nodeSearchDock" class="footer-search-dock" aria-label="Node search">
+          <div class="footer-search-panel">
+            <div id="nodeSearchStatus" class="footer-search-status small muted"></div>
+            <div id="nodeSearchMatches" class="footer-search-matches hidden"></div>
+            <div class="footer-search-row">
+              <input id="nodeSearchInput" type="text" placeholder="Search nodes" aria-label="Search nodes" />
+              <button id="nodeSearchBtn" class="footer-search-icon-btn" type="button" aria-label="Search">
+                <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <circle cx="7" cy="7" r="4.25"></circle>
+                  <path d="M10.4 10.4 13.5 13.5"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
 
 <div id="statusBar">
@@ -596,6 +615,55 @@
     </div>
   </div>
   <script type="module" src="./src/main.js"></script>
+
+  <div id="startupLoadModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="startupLoadTitle">
+    <div class="modal-backdrop" data-startup-modal-close="true"></div>
+    <div class="modal-card startup-modal-card">
+      <div class="modal-head">
+        <div id="startupLoadTitle" class="modal-title">Welcome to 3D Network Studio</div>
+        <button id="closeStartupLoadBtn" class="ghost small" aria-label="Close start window">×</button>
+      </div>
+      <div class="modal-body startup-modal-body">
+        <div class="startup-intro">
+          To start, open your own graph, or work with a sample graph to explore the studio, test layouts, and get a feel for the workflow.
+        </div>
+        <div class="modal-section">
+          <div class="modal-section-title">Open your graph</div>
+          <div class="modal-content startup-modal-content">
+            <div class="startup-load-grid">
+              <button id="startupChooseGexfBtn" class="primary" type="button">Choose GEXF</button>
+              <div id="startupGexfFileName" class="small muted">No GEXF selected</div>
+              <button id="startupChooseNodesCsvBtn" class="ghost" type="button">Choose Nodes CSV</button>
+              <div id="startupNodesCsvFileName" class="small muted">No nodes CSV selected</div>
+              <button id="startupChooseEdgesCsvBtn" class="ghost" type="button">Choose Edges CSV</button>
+              <div id="startupEdgesCsvFileName" class="small muted">No edges CSV selected</div>
+            </div>
+            <div class="startup-csv-guide small muted">
+              CSV guide: the nodes file should include <code>id</code> and can also include <code>label</code> plus any extra attributes. The edges file should include <code>source</code> and <code>target</code>, with optional <code>weight</code> or other edge attributes.
+            </div>
+            <button id="startupLoadGraphBtn" class="primary full top-gap" type="button">Load selected files</button>
+          </div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-section-title">Open a sample</div>
+          <div class="startup-samples">
+            <button class="startup-sample-card" type="button" data-demo-value="les-miserables">
+              <strong>Les Misérables</strong>
+              <span>Character co-appearance network with rich communities.</span>
+            </button>
+            <button class="startup-sample-card" type="button" data-demo-value="karate-club">
+              <strong>Karate Club</strong>
+              <span>Small classic social graph that is great for layout exploration.</span>
+            </button>
+            <button class="startup-sample-card" type="button" data-demo-value="florentine-families">
+              <strong>Florentine Families</strong>
+              <span>Historic family ties with an immediately readable structure.</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
 
   <!-- Network details modal (opened from Step 7 Export) -->
