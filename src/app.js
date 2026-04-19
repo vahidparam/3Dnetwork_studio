@@ -507,7 +507,7 @@ export class App {
       graph: null,
       graphName: 'Untitled graph',
       quality: 'interactive',
-      activeMethod: 'kde',
+      activeMethod: 'legacy',
       positions2D: [],
       positions3D: [],
       mappedPositions3D: [],
@@ -1345,7 +1345,7 @@ export class App {
       clusterCount: 'How many corridor groups or bundle spines the method is allowed to form. Fewer clusters create broader trunks; more clusters preserve local detail.',
       hubCount: 'How many high-traffic relay hubs can mediate paths. Lower values centralize the flow; higher values distribute it.',
       detourCap: 'Upper bound on how far rerouted paths are allowed to deviate from the direct connection. Higher values encourage shared routes but inflate path length.',
-      exponent: 'Bias applied to legacy rerouting. Larger values emphasize strong corridors and suppress weaker alternatives.',
+      exponent: 'Bias applied to graph route path weighting. Larger values emphasize strong corridors and suppress weaker alternatives.',
       directionSplit: 'Separates opposing directions into adjacent lanes. Increase it when directional readability is more important than maximum compactness.',
       grid: 'Resolution of the density or vector field used by image-space approximations. Higher grid sizes create cleaner corridors but need more computation and memory.',
       layerAttr: 'Categorical attribute used to keep bundles separated into semantic layers. Choose an attribute that represents communities, time slices, or strata.',
@@ -2026,7 +2026,8 @@ export class App {
       viewportHeight: this.dom.viewport.clientHeight,
       background: this.dom.backgroundColor?.value || getStylePreset(this.dom.stylePreset.value).background,
       visibleMask: renderableMask,
-      focusIndexes: Array.from(focusSet)
+      focusIndexes: Array.from(focusSet),
+      selectionMode: this.state.selectedNodeIndex != null
     });
 
     if (this.dom.labelsLayer) this.dom.labelsLayer.style.display = this.state.showLabels ? '' : 'none';

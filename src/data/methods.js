@@ -163,7 +163,7 @@ export const METHOD_LIBRARY = [
   },
   {
     id: 'legacy',
-    name: 'Graph route legacy',
+    name: 'Graph route',
     family: 'path-based',
     status: 'existing',
     intuition: 'Seek alternate paths through the graph itself and draw edges as softened route-following splines.',
